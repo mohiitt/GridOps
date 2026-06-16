@@ -1,1 +1,0 @@
-{"event_id":"evt_d_bess011_0000","event_type":"dispatch","source_system":"GridOpsAI","site_id":"SITE-DS-001","asset_id":"BESS-011","timestamp":"2026-06-16T13:00:00Z","schema_version":"1.0","correlation_id":"corr_bess011_dispatch","payload":{"dispatch_id":"DSP-0001","command":"discharge","requested_power_mw":4.2,"duration_minutes":360,"grid_signal":"peak_demand","active":true}}
