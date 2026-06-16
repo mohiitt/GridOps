@@ -1,6 +1,6 @@
 "use client";
 
-import React, { use } from "react";
+import React from "react";
 import { useScenario } from "@/providers/ScenarioProvider";
 import StatusBadge from "@/components/StatusBadge";
 import EvidenceCard from "@/components/EvidenceCard";
@@ -15,10 +15,8 @@ type PageParams = {
   id: string;
 };
 
-export default function IncidentDetailPage({ params }: { params: Promise<PageParams> }) {
-  // Resolve params promise
-  const resolvedParams = use(params);
-  const incidentId = resolvedParams.id;
+export default function IncidentDetailPage({ params }: { params: PageParams }) {
+  const incidentId = params.id;
 
   const { activeBundle, incidents, isAnalyzing } = useScenario();
 

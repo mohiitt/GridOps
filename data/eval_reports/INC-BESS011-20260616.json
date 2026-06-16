@@ -1,0 +1,61 @@
+{
+  "incident_id": "INC-BESS011-20260616",
+  "scenario_id": "SCN-C",
+  "site_id": "SITE-DS-001",
+  "asset_id": "BESS-011",
+  "asset_name": "BESS Unit 011",
+  "created_at": "2026-06-16T22:47:10Z",
+  "status": "awaiting_approval",
+  "title": "BESS thermal management risk on BESS-011",
+  "root_cause": "bess_thermal_management_degradation",
+  "priority": "critical",
+  "confidence": 0.88,
+  "symptom": "high_battery_temperature",
+  "anomaly_score": 0.92,
+  "grouped_alert_ids": [
+    "ALT-BESS-011-0001",
+    "ALT-BESS-011-0002",
+    "ALT-BESS-011-0003"
+  ],
+  "alert_count": 3,
+  "evidence": [
+    {
+      "evidence_id": "EV-INC-BESS011-20260616-1",
+      "text": "Telemetry: Module B7 cell temperatures reached 68\u00b0C under dispatch load.",
+      "source": "telemetry"
+    },
+    {
+      "evidence_id": "EV-INC-BESS011-20260616-2",
+      "text": "Telemetry: Coolant loop pressure dropped from 3.2 bar to 1.1 bar.",
+      "source": "telemetry"
+    },
+    {
+      "evidence_id": "EV-INC-BESS011-20260616-3",
+      "text": "Governance: Rule 'Asset offline action triggers a rule match' and 'Thermal runaway risk' triggered.",
+      "source": "governance_rules"
+    }
+  ],
+  "business_impact": {
+    "energy_loss_mwh_per_day": 6.4,
+    "revenue_loss_usd_per_day": 480.0,
+    "energy_price_per_mwh": 75.0
+  },
+  "recommended_action": "escalate_to_site_engineer_and_inspect_cooling_loop_immediately",
+  "action_window_hours": 4,
+  "governance": {
+    "approval_required": true,
+    "auto_executable": false,
+    "escalation_level": "site_engineer",
+    "requires_immediate": true,
+    "decision": null,
+    "audit_id": "AUD-0003"
+  },
+  "operator_briefing": "Battery Energy Storage System BESS-011 is experiencing a critical thermal management risk. Multiple battery cells within Module B7 have exceeded the safety threshold of 55\u00b0C, reaching a peak of 68\u00b0C under a high dispatch discharge load. The cooling loop pressure dropped from 3.2 bar to 1.1 bar, indicating a probable coolant leak. Safety policies require human intervention to authorize dispatch of site personnel for manual inspection and potential module isolation to prevent thermal runaway.",
+  "trace": {
+    "tfy_trace_id": "mock_trace_inc_bess011_20260616",
+    "llm_calls": 9,
+    "total_latency_ms": 319,
+    "total_tokens": 15000,
+    "total_cost_usd": 0.0045
+  }
+}

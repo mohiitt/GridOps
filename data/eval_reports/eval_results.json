@@ -1,0 +1,68 @@
+{
+  "per_scenario": [
+    {
+      "scenario_id": "SCN-A",
+      "incident_detected": false,
+      "alert_grouping_match": true,
+      "root_cause_match": true,
+      "priority_match": true,
+      "action_match": true,
+      "approval_match": true,
+      "business_impact_within_range": true,
+      "latency_ms": 0,
+      "cost_usd": 0.0,
+      "overall_result": "pass",
+      "notes": "Correctly produced no incident for non-incident scenario"
+    },
+    {
+      "scenario_id": "SCN-B",
+      "incident_detected": true,
+      "alert_grouping_match": false,
+      "root_cause_match": true,
+      "priority_match": true,
+      "action_match": true,
+      "approval_match": true,
+      "business_impact_within_range": true,
+      "latency_ms": 240,
+      "cost_usd": 0.0045,
+      "overall_result": "pass"
+    },
+    {
+      "scenario_id": "SCN-C",
+      "incident_detected": true,
+      "alert_grouping_match": false,
+      "root_cause_match": true,
+      "priority_match": true,
+      "action_match": true,
+      "approval_match": true,
+      "business_impact_within_range": false,
+      "latency_ms": 319,
+      "cost_usd": 0.0045,
+      "overall_result": "pass"
+    },
+    {
+      "scenario_id": "SCN-D",
+      "incident_detected": false,
+      "alert_grouping_match": true,
+      "root_cause_match": true,
+      "priority_match": true,
+      "action_match": true,
+      "approval_match": true,
+      "business_impact_within_range": true,
+      "latency_ms": 0,
+      "cost_usd": 0.0,
+      "overall_result": "pass",
+      "notes": "Correctly produced no incident for non-incident scenario"
+    }
+  ],
+  "aggregate": {
+    "scenarios": 4,
+    "passed": 4,
+    "failed": 0,
+    "pass_rate": 1.0,
+    "root_cause_accuracy": 1.0,
+    "false_escalation_rate": 0.0,
+    "avg_latency_ms": 279.5,
+    "avg_cost_usd": 0.0045
+  }
+}

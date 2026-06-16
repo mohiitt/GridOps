@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from "react";
 import {
   ScenarioBundle,
   ScenarioId,
@@ -67,6 +67,7 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [evalResults, setEvalResults] = useState<EvalResults | null>(null);
+  const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const activeBundle = bundles[currentScenarioId];
   const incidents = activeBundle.incidents;
@@ -112,6 +113,11 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
       await _runLiveAnalysis();
     } else {
       await _runFixtureAnalysis();
+    }
+
+    if (animationTimeoutRef.current) {
+      clearTimeout(animationTimeoutRef.current);
+      animationTimeoutRef.current = null;
     }
 
     setIsAnalyzing(false);
@@ -311,14 +317,21 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
         const clone = { ...prev };
         clone[currentScenarioId] = {
           ...clone[currentScenarioId],
-          agentTraces: clone[currentScenarioId].agentTraces.map((t, j) =>
-            j === idx ? { ...t, status: "running" as const } : t,
-          ),
+          agentTraces: clone[currentScenarioId].agentTraces.map((t, j) => {
+            if (j === idx) {
+              return { ...t, status: "running" as const };
+            }
+            if (j === idx - 1) {
+              const orig = scenarioBundles[currentScenarioId].agentTraces[j];
+              return { ...t, status: orig.status };
+            }
+            return t;
+          }),
         };
         return clone;
       });
       const ms = traces[idx].agentName.includes("Briefing") ? 9000 : 6000;
-      setTimeout(step, ms);
+      animationTimeoutRef.current = setTimeout(step, ms);
     };
     step();
   };
@@ -483,8 +496,8 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
         const results = await fetchEvalResults();
         if (results) {
           setEvalResults(results);
-          const { passed, total } = results.aggregate;
-          addToast(`Evaluation complete — ${passed}/${total} scenarios passed.`, "success");
+          const { passed, scenarios } = results.aggregate;
+          addToast(`Evaluation complete — ${passed}/${scenarios} scenarios passed.`, "success");
           setIsEvaluating(false);
           return;
         }
@@ -502,6 +515,14 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
 
     setIsEvaluating(false);
   };
+
+  useEffect(() => {
+    return () => {
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // ── Return ─────────────────────────────────────────────────────────────────
 

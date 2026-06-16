@@ -17,7 +17,7 @@ export default function EvaluationPage() {
 
   // Prefer live eval results when in live mode and available
   const agg = evalResults?.aggregate;
-  const total = agg?.total ?? cases.length;
+  const total = agg?.scenarios ?? cases.length;
   const passed = agg?.passed ?? cases.filter((c) => c.result === "pass").length;
   const rcAccuracy = agg
     ? `${(agg.root_cause_accuracy * 100).toFixed(0)}%`

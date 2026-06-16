@@ -197,7 +197,7 @@ export async function pollForIncident(
 export interface EvalResults {
   per_scenario: Record<string, unknown>[];
   aggregate: {
-    total: number;
+    scenarios: number;
     passed: number;
     failed: number;
     root_cause_accuracy: number;
