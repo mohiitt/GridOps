@@ -1,0 +1,18 @@
+name: gridops-anomaly-service
+type: service
+image:
+  type: build
+  build_spec:
+    type: dockerfile
+    dockerfile_path: services/anomaly_service/Dockerfile
+ports:
+  - port: 8001
+    protocol: TCP
+    expose: true
+resources:
+  cpu_request: 0.2
+  cpu_limit: 0.5
+  memory_request: 256
+  memory_limit: 512
+env:
+  USE_ML: "false"

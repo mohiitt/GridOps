@@ -1,0 +1,118 @@
+correlate_alerts_task:
+  description: >
+    Given the incident candidate with alert IDs {grouped_alert_ids} for asset {asset_id},
+    query the alerts and group them into a coherent cluster.
+    Output JSON with: grouped_alert_ids (list), alert_count (int),
+    max_severity (str), cluster_rationale (str).
+  expected_output: >
+    A JSON object with keys: grouped_alert_ids, alert_count, max_severity, cluster_rationale.
+  agent: alert_correlation_agent
+
+analyze_telemetry_task:
+  description: >
+    Query the telemetry window for asset {asset_id} from {window_start} to {window_end}.
+    Call the TrueFoundry anomaly service to get the score.
+    Identify: symptom, temperature_trend (rising/stable/falling),
+    whether temperature rose BEFORE the output drop (temperature_before_output_drop),
+    fan_instability (bool), efficiency_drop_pct, anomaly_score, confidence.
+    Output JSON with all fields.
+  expected_output: >
+    A JSON object with keys: symptom, temperature_trend, temperature_before_output_drop,
+    fan_instability, efficiency_drop_pct, anomaly_score, confidence.
+  agent: telemetry_analysis_agent
+
+query_maintenance_task:
+  description: >
+    Query maintenance history and manufacturer notes for asset {asset_id}.
+    Determine: similar_past_issue (bool), last_similar_record_id (str or null),
+    months_since (int or null), runtime_hours (int), runtime_above_risk_threshold (bool),
+    manufacturer_note_id (str or null).
+  expected_output: >
+    A JSON object with keys: similar_past_issue, last_similar_record_id,
+    months_since, runtime_hours, runtime_above_risk_threshold, manufacturer_note_id.
+  agent: maintenance_history_agent
+
+analyze_weather_task:
+  description: >
+    Query weather observations and forecast vs actual for site {site_id} / asset {asset_id}.
+    Determine: weather_explains_loss (bool), weather_adjusted_deviation_pct (float),
+    irradiance_stable (bool), cloud_cover_pct (float).
+  expected_output: >
+    A JSON object with keys: weather_explains_loss, weather_adjusted_deviation_pct,
+    irradiance_stable, cloud_cover_pct.
+  agent: weather_forecast_agent
+
+determine_root_cause_task:
+  description: >
+    Using outputs from the alert correlation, telemetry analysis, maintenance history,
+    and weather analysis tasks, synthesize a single root cause determination.
+    root_cause must be one of: normal_operation | cooling_subsystem_degradation |
+    bess_thermal_management_degradation | weather_driven_output_reduction.
+    Include a numbered evidence list (max 6 items) with text and source fields.
+  expected_output: >
+    A JSON object with keys: root_cause, confidence, evidence
+    (list of {evidence_id, text, source}).
+  agent: root_cause_agent
+  context:
+    - correlate_alerts_task
+    - analyze_telemetry_task
+    - query_maintenance_task
+    - analyze_weather_task
+
+calculate_impact_task:
+  description: >
+    Query forecast vs actual for asset {asset_id} and calculate daily energy and
+    revenue loss. Use energy_price={energy_price} USD/MWh.
+    Output JSON with: energy_loss_mwh_per_day, revenue_loss_usd_per_day, basis.
+  expected_output: >
+    A JSON object with keys: energy_loss_mwh_per_day, revenue_loss_usd_per_day, basis.
+  agent: business_impact_agent
+
+recommend_action_task:
+  description: >
+    Based on root_cause from the root cause task, recommend a standardized action.
+    recommended_action must be one of:
+      continue_monitoring |
+      inspect_cooling_fan_within_24_hours |
+      escalate_to_site_engineer_and_inspect_cooling_loop_immediately
+    Also output action_window_hours (int) and priority
+    (one of: low | medium | high | critical).
+  expected_output: >
+    A JSON object with keys: recommended_action, action_window_hours, priority.
+  agent: maintenance_recommendation_agent
+  context:
+    - determine_root_cause_task
+
+apply_governance_task:
+  description: >
+    Apply governance rules to the incident draft. Use the recommended_action
+    and priority from the recommendation task.
+    Output JSON with: approval_required, auto_executable, escalation_level,
+    requires_immediate, reason.
+  expected_output: >
+    A JSON object with keys: approval_required, auto_executable, escalation_level,
+    requires_immediate, reason.
+  agent: safety_governance_agent
+  context:
+    - recommend_action_task
+    - determine_root_cause_task
+
+write_briefing_task:
+  description: >
+    Write the final operator briefing for asset {asset_id} incident.
+    Combine evidence from ALL previous tasks.
+    The briefing should be 3-5 clear sentences a control room operator can act on.
+    Do not add speculation. Reference: root cause, key evidence, business impact,
+    recommended action, and governance/approval status.
+  expected_output: >
+    A plain text operator briefing (3-5 sentences).
+  agent: operator_briefing_agent
+  context:
+    - correlate_alerts_task
+    - analyze_telemetry_task
+    - query_maintenance_task
+    - analyze_weather_task
+    - determine_root_cause_task
+    - calculate_impact_task
+    - recommend_action_task
+    - apply_governance_task

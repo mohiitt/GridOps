@@ -1,0 +1,14 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+crewai>=0.80
+crewai-tools>=0.12
+faker>=24.0
+numpy>=1.26
+pandas>=2.2
+python-dateutil>=2.9
+requests>=2.31
+python-dotenv>=1.0
+# optional
+scikit-learn>=1.4
+confluent-kafka>=2.3

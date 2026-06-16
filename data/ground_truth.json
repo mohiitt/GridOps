@@ -1,0 +1,62 @@
+[
+  {
+    "scenario_id": "SCN-A",
+    "scenario_name": "Normal Operation",
+    "incident_expected": false,
+    "affected_asset_id": null,
+    "expected_root_cause": "normal_operation",
+    "expected_priority": "low",
+    "expected_action": "continue_monitoring",
+    "approval_required": false,
+    "expected_grouped_alerts_min": 0,
+    "expected_grouped_alerts_max": 1,
+    "expected_energy_impact_mwh_day_min": 0.0,
+    "expected_energy_impact_mwh_day_max": 0.2,
+    "should_escalate": false
+  },
+  {
+    "scenario_id": "SCN-B",
+    "scenario_name": "Inverter Cooling Degradation",
+    "incident_expected": true,
+    "affected_asset_id": "INV-042",
+    "expected_root_cause": "cooling_subsystem_degradation",
+    "expected_priority": "high",
+    "expected_action": "inspect_cooling_fan_within_24_hours",
+    "approval_required": true,
+    "expected_grouped_alerts_min": 8,
+    "expected_grouped_alerts_max": 14,
+    "expected_energy_impact_mwh_day_min": 2.0,
+    "expected_energy_impact_mwh_day_max": 3.5,
+    "should_escalate": true
+  },
+  {
+    "scenario_id": "SCN-C",
+    "scenario_name": "BESS Thermal Management Risk",
+    "incident_expected": true,
+    "affected_asset_id": "BESS-011",
+    "expected_root_cause": "bess_thermal_management_degradation",
+    "expected_priority": "critical",
+    "expected_action": "escalate_to_site_engineer_and_inspect_cooling_loop_immediately",
+    "approval_required": true,
+    "expected_grouped_alerts_min": 8,
+    "expected_grouped_alerts_max": 12,
+    "expected_energy_impact_mwh_day_min": 0.0,
+    "expected_energy_impact_mwh_day_max": 5.0,
+    "should_escalate": true
+  },
+  {
+    "scenario_id": "SCN-D",
+    "scenario_name": "Weather-Driven False Positive",
+    "incident_expected": false,
+    "affected_asset_id": null,
+    "expected_root_cause": "weather_driven_output_reduction",
+    "expected_priority": "low",
+    "expected_action": "continue_monitoring",
+    "approval_required": false,
+    "expected_grouped_alerts_min": 0,
+    "expected_grouped_alerts_max": 6,
+    "expected_energy_impact_mwh_day_min": 0.0,
+    "expected_energy_impact_mwh_day_max": 1.0,
+    "should_escalate": false
+  }
+]

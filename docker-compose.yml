@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  # Mode 2 (optional): Redpanda as Kafka-compatible broker
+  redpanda:
+    image: vectorized/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp 1
+      - --memory 512M
+      - --reserve-memory 0M
+      - --node-id 0
+      - --check=false
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    profiles:
+      - kafka
+
+  anomaly_service:
+    build:
+      context: .
+      dockerfile: services/anomaly_service/Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      USE_ML: "false"
+
+  ingestion_service:
+    build:
+      context: .
+      dockerfile: services/ingestion_service/Dockerfile
+    ports:
+      - "8002:8002"
+    environment:
+      ANOMALY_SERVICE_URL: http://anomaly_service:8001
+
+  crew_service:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+
+  incident_api:
+    build:
+      context: .
+      dockerfile: services/incident_api/Dockerfile
+    ports:
+      - "8000:8000"

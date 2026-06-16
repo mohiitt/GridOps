@@ -1,0 +1,22 @@
+[
+  {
+    "note_id": "MN-INV-001",
+    "asset_type": "solar_inverter",
+    "manufacturer": "SunGrid Power Systems",
+    "model": "SG-4000-XT",
+    "title": "Cooling fan degradation risk",
+    "body": "Cooling fan bearings show elevated failure probability after 18,000 runtime hours. Inspect fan and recalibrate thermal sensors if inverter_temperature_c exceeds 80C under nominal load.",
+    "risk_threshold_runtime_hours": 18000,
+    "related_symptom": "thermal_derating"
+  },
+  {
+    "note_id": "MN-BESS-001",
+    "asset_type": "bess_unit",
+    "manufacturer": "NorthCell Storage",
+    "model": "NC-5000-LFP",
+    "title": "Thermal management loop sensitivity",
+    "body": "During active dispatch, cooling loop temperature above 38C combined with cell temperature above 45C indicates thermal management degradation. Escalate immediately if battery_temperature_c exceeds 50C.",
+    "risk_threshold_temp_c": 50,
+    "related_symptom": "thermal_runaway_risk"
+  }
+]
