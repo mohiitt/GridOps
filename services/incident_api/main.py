@@ -2,27 +2,32 @@
 Incident Report API — FastAPI, port 8000 per §13.8.
 
 Frontend-facing endpoints:
-  GET  /api/incidents                         → list summaries
-  GET  /api/incidents/{incident_id}           → full report
-  POST /api/incidents/{incident_id}/decision  → operator decision
-  GET  /api/audit/{incident_id}               → audit trail
-  GET  /api/scenarios                         → available scenarios + status
+  GET  /api/incidents                          → list summaries
+  GET  /api/incidents/{incident_id}            → full report
+  POST /api/incidents/{incident_id}/decision   → operator decision
+  GET  /api/audit/{incident_id}                → audit trail
+  GET  /api/scenarios                          → available scenarios + status
+  POST /api/scenarios/{scenario_name}/run      → trigger live scenario (streams to ingestion)
+  GET  /api/eval/results                       → latest eval results JSON
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+import requests as _requests
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import store
 from .schemas import DecisionRequest, IncidentSummary
 from common.ids import audit_id, work_order_id
 from common.timeutil import utcnow_str
+
+logger = logging.getLogger("gridops.incident_api")
 
 app = FastAPI(
     title="GridOps Incident Report API",
@@ -177,12 +182,144 @@ def list_scenarios() -> list[dict[str, Any]]:
 
 @app.post("/api/reports")
 def ingest_report(report: dict[str, Any]) -> dict[str, Any]:
-    """
-    Accept a report from the crew service and store it.
-    Used by crew service to register its reports with the API.
-    """
+    """Accept a report from the crew service and store it."""
     store.add_report(report)
     return {"status": "stored", "incident_id": report.get("incident_id")}
+
+
+# ── Scenario runner ────────────────────────────────────────────────────────────
+
+SCENARIO_IDS = {
+    "normal_operation": "SCN-A",
+    "inverter_cooling_degradation": "SCN-B",
+    "bess_thermal_risk": "SCN-C",
+    "weather_false_positive": "SCN-D",
+}
+
+VALID_SCENARIOS = set(SCENARIO_IDS.keys())
+
+INGESTION_URL = os.getenv("INGESTION_SERVICE_URL", "http://localhost:8002")
+
+
+def _load_scenario_events(scenario_name: str) -> list[dict[str, Any]]:
+    """Load and merge all six JSONL streams for a scenario, sorted by timestamp."""
+    base_dir = Path("data/scenarios") / scenario_name
+    jsonl_files = [
+        "telemetry_events.jsonl",
+        "alert_events.jsonl",
+        "weather_events.jsonl",
+        "forecast_events.jsonl",
+        "maintenance_events.jsonl",
+        "grid_dispatch_events.jsonl",
+    ]
+    events: list[dict[str, Any]] = []
+    for fname in jsonl_files:
+        fpath = base_dir / fname
+        if fpath.exists():
+            with open(fpath) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        events.append(json.loads(line))
+    events.sort(key=lambda e: e.get("timestamp", ""))
+    return events
+
+
+def _stream_scenario_background(scenario_name: str, events: list[dict[str, Any]]) -> None:
+    """Background task: stream pre-loaded events to the ingestion service."""
+    ingest_ep = f"{INGESTION_URL}/ingest"
+    with _requests.Session() as session:
+        for event in events:
+            try:
+                session.post(ingest_ep, json=event, timeout=15)
+            except Exception as exc:
+                logger.warning("Ingest POST failed: %s", exc)
+    logger.info("Streamed %d events for scenario %s", len(events), scenario_name)
+
+
+@app.post("/api/scenarios/{scenario_name}/run")
+def run_scenario(scenario_name: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """
+    Trigger a live scenario run.
+
+    1. Resets ingestion state.
+    2. Sets scenario context on ingestion service.
+    3. Loads all JSONL events and streams them in background (instant replay).
+    4. Returns immediately — poll GET /api/incidents for new reports.
+
+    Crew analysis is dispatched automatically by the ingestion service
+    when it detects an incident candidate (BackgroundTasks wiring in ingestion/main.py).
+    """
+    if scenario_name not in VALID_SCENARIOS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown scenario '{scenario_name}'. Valid: {sorted(VALID_SCENARIOS)}",
+        )
+
+    scenario_id = SCENARIO_IDS[scenario_name]
+
+    # Verify data exists
+    scenario_dir = Path("data/scenarios") / scenario_name
+    if not scenario_dir.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Scenario data not found at {scenario_dir}. Run: make gen-data",
+        )
+
+    # Load events upfront (fast — just file I/O)
+    try:
+        events = _load_scenario_events(scenario_name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load events: {exc}")
+
+    # 1. Reset ingestion state
+    try:
+        _requests.post(f"{INGESTION_URL}/reset", timeout=10).raise_for_status()
+        logger.info("Reset ingestion state for %s", scenario_name)
+    except Exception as exc:
+        logger.warning("Could not reset ingestion (continuing): %s", exc)
+
+    # 2. Set scenario context on ingestion service
+    try:
+        _requests.post(
+            f"{INGESTION_URL}/set_context",
+            json={"scenario": scenario_name, "scenario_id": scenario_id, "site_id": "SITE-DS-001"},
+            timeout=10,
+        ).raise_for_status()
+    except Exception as exc:
+        logger.warning("Could not set context on ingestion (continuing): %s", exc)
+
+    # 3. Stream events in background
+    background_tasks.add_task(_stream_scenario_background, scenario_name, events)
+
+    logger.info(
+        "Scenario %s (%s) queued for streaming — %d events",
+        scenario_name, scenario_id, len(events),
+    )
+    return {
+        "status": "streaming",
+        "scenario": scenario_name,
+        "scenario_id": scenario_id,
+        "event_count": len(events),
+        "message": f"Streaming {len(events)} events to ingestion. Poll GET /api/incidents?scenario={scenario_id} for results.",
+    }
+
+
+# ── Eval results ───────────────────────────────────────────────────────────────
+
+@app.get("/api/eval/results")
+def get_eval_results() -> dict[str, Any]:
+    """Return the latest evaluation results from data/eval_reports/eval_results.json."""
+    eval_path = Path("data/eval_reports/eval_results.json")
+    if not eval_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No eval results found. Run: make eval  (or make run-all-scenarios && make eval)",
+        )
+    try:
+        return json.loads(eval_path.read_text())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read eval results: {exc}")
 
 
 @app.get("/health")

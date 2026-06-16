@@ -19,7 +19,9 @@ import {
   Clock,
   MapPin,
   Flame,
-  LayoutGrid
+  LayoutGrid,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -30,7 +32,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     runAIAnalysis,
     isAnalyzing,
     analysisStep,
-    agentTraces
+    agentTraces,
+    isLiveMode,
   } = useScenario();
 
   const navItems = [
@@ -107,7 +110,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </nav>
 
         {/* Sidebar Footer */}
-        <div className="p-4 border-t border-[#E2E8F0] bg-slate-50">
+        <div className="p-4 border-t border-[#E2E8F0] bg-slate-50 space-y-2">
+          {/* Live / Fixture badge */}
+          {isLiveMode ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200">
+              <Wifi className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+              <span className="font-mono text-[10px] font-bold text-emerald-700 uppercase tracking-wider">
+                LIVE API
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-100 border border-slate-200">
+              <WifiOff className="w-3 h-3 text-slate-400 flex-shrink-0" />
+              <span className="font-mono text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                FIXTURE MODE
+              </span>
+            </div>
+          )}
+
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -117,7 +137,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               GridOps AI Online
             </span>
           </div>
-          <p className="text-[10px] text-[#94A3B8] font-medium mt-1">
+          <p className="text-[10px] text-[#94A3B8] font-medium">
             Desert Sun Facility
           </p>
         </div>

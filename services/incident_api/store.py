@@ -45,13 +45,16 @@ def list_reports() -> list[dict[str, Any]]:
     for r in _reports.values():
         summaries.append({
             "incident_id": r.get("incident_id"),
+            "scenario_id": r.get("scenario_id"),      # required for frontend polling
             "asset_id": r.get("asset_id"),
             "asset_name": r.get("asset_name"),
+            "site_id": r.get("site_id"),
             "title": r.get("title"),
             "priority": r.get("priority"),
             "status": r.get("status"),
             "root_cause": r.get("root_cause"),
             "anomaly_score": r.get("anomaly_score"),
+            "confidence": r.get("confidence"),
             "created_at": r.get("created_at"),
         })
     return sorted(summaries, key=lambda x: x.get("created_at", ""), reverse=True)

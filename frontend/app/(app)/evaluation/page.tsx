@@ -3,10 +3,10 @@
 import React, { useState } from "react";
 import { useScenario } from "@/providers/ScenarioProvider";
 import MetricCard from "@/components/MetricCard";
-import { Check, AlertCircle, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
+import { Check, AlertCircle, RefreshCw, ChevronDown, ChevronUp, Wifi } from "lucide-react";
 
 export default function EvaluationPage() {
-  const { activeBundle, rerunEvaluation, isEvaluating } = useScenario();
+  const { activeBundle, rerunEvaluation, isEvaluating, evalResults, isLiveMode } = useScenario();
   const cases = activeBundle.evaluationCases;
 
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
@@ -15,14 +15,33 @@ export default function EvaluationPage() {
     setExpandedIndex(expandedIndex === index ? null : index);
   };
 
+  // Prefer live eval results when in live mode and available
+  const agg = evalResults?.aggregate;
+  const total = agg?.total ?? cases.length;
+  const passed = agg?.passed ?? cases.filter((c) => c.result === "pass").length;
+  const rcAccuracy = agg
+    ? `${(agg.root_cause_accuracy * 100).toFixed(0)}%`
+    : "100%";
+  const falseEscalation = agg
+    ? `${(agg.false_escalation_rate * 100).toFixed(0)}%`
+    : "0%";
+
   return (
     <div className="space-y-6">
+      {/* Live eval results banner */}
+      {isLiveMode && evalResults && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-800">
+          <Wifi className="w-3.5 h-3.5 text-emerald-600" />
+          Showing live evaluation results from backend ({passed}/{total} scenarios passed)
+        </div>
+      )}
+
       {/* 1. Summary Metrics Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-        <MetricCard label="Root Cause Match" value="3 / 3 cases" subtext="100% Accuracy" status="success" />
+        <MetricCard label="Root Cause Match" value={`${passed} / ${total} cases`} subtext={`${rcAccuracy} Accuracy`} status="success" />
         <MetricCard label="Priority Accuracy" value="100%" subtext="Expected matches actual" status="success" />
-        <MetricCard label="Action Match" value="3 / 3 cases" subtext="Standardized SOP fits" status="success" />
-        <MetricCard label="False Escalation" value="0%" subtext="No false incidents" status="success" />
+        <MetricCard label="Action Match" value={`${passed} / ${total} cases`} subtext="Standardized SOP fits" status="success" />
+        <MetricCard label="False Escalation" value={falseEscalation} subtext="No false incidents" status="success" />
         <MetricCard label="Avg Pipeline Time" value="11.4s" subtext="Sequential execution time" status="neutral" />
         <MetricCard label="Avg LLM Cost" value="$0.042" subtext="GPT-4o + 4o-mini gateway" status="success" />
       </div>

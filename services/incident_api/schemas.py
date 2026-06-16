@@ -30,6 +30,7 @@ class TraceInfo(BaseModel):
     tfy_trace_id: str
     llm_calls: int
     total_latency_ms: int
+    total_tokens: Optional[int] = None
     total_cost_usd: float
 
 
@@ -60,13 +61,16 @@ class IncidentReport(BaseModel):
 
 class IncidentSummary(BaseModel):
     incident_id: str
+    scenario_id: Optional[str] = None
     asset_id: str
     asset_name: Optional[str] = None
+    site_id: Optional[str] = None
     title: Optional[str] = None
     priority: Optional[str] = None
     status: Optional[str] = None
     root_cause: Optional[str] = None
     anomaly_score: Optional[float] = None
+    confidence: Optional[float] = None
     created_at: Optional[str] = None
 
 

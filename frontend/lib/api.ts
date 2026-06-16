@@ -1,93 +1,220 @@
-import { Incident, AuditEvent, ScenarioId } from "../types";
+/**
+ * GridOps API client — live mode wrapper.
+ *
+ * All functions check NEXT_PUBLIC_USE_LIVE_API:
+ *   true  → real backend calls, adapted through adapters.ts
+ *   false → return empty / null (fixture data is injected by ScenarioProvider)
+ *
+ * Failures in live mode are logged and re-throw so the caller can toast + fall back.
+ */
 
-const USE_LIVE_API = process.env.NEXT_PUBLIC_USE_LIVE_API === "true";
+import type {
+  Incident,
+  AuditEvent,
+  Evidence,
+  AgentTrace,
+  TrueFoundryTrace,
+  ScenarioId,
+} from "../types";
 
-const API_PORTS = {
-  incident: "8000",
-  anomaly: "8001",
-  ingestion: "8002",
-  crew: "8003"
-};
+import type {
+  BackendIncidentReport,
+  BackendIncidentSummary,
+  BackendAuditResponse,
+  BackendScenarioRunResponse,
+} from "../types/backend";
 
-const BASE_URLS = {
-  incident: `http://localhost:${API_PORTS.incident}/api`,
-  crew: `http://localhost:${API_PORTS.crew}`
-};
+import {
+  mapBackendIncident,
+  mapBackendEvidence,
+  mapBackendAudit,
+  buildAgentTracesFromReport,
+  buildTrueFoundryTracesFromReport,
+  scenarioIdToBackendName,
+  scenarioIdToScnId,
+} from "./adapters";
 
-export async function delay(ms: number): Promise<void> {
+// ── Configuration ──────────────────────────────────────────────────────────────
+
+export const USE_LIVE_API = process.env.NEXT_PUBLIC_USE_LIVE_API === "true";
+
+function incidentBase(): string {
+  return (process.env.NEXT_PUBLIC_INCIDENT_API_URL ?? "http://localhost:8000") + "/api";
+}
+function ingestionBase(): string {
+  return process.env.NEXT_PUBLIC_INGESTION_API_URL ?? "http://localhost:8002";
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+async function get<T>(url: string): Promise<T> {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`GET ${url} → ${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function post<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`POST ${url} → ${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ── Incidents ──────────────────────────────────────────────────────────────────
+
+/** Fetch all incident summaries. In fixture mode returns []. */
 export async function fetchIncidents(): Promise<Incident[]> {
-  if (USE_LIVE_API) {
-    try {
-      const res = await fetch(`${BASE_URLS.incident}/incidents`);
-      if (res.ok) return await res.json();
-    } catch (err) {
-      console.error("Failed to fetch live incidents, falling back to fixtures", err);
-    }
-  }
-  await delay(300);
-  return []; // Provider will handle fixture matching
+  if (!USE_LIVE_API) return [];
+  const summaries = await get<BackendIncidentSummary[]>(`${incidentBase()}/incidents`);
+  // Fetch full reports for proper mapping (summaries lack evidence/briefing)
+  const full = await Promise.all(
+    summaries.map((s) =>
+      get<BackendIncidentReport>(`${incidentBase()}/incidents/${s.incident_id}`).catch(
+        () => null,
+      ),
+    ),
+  );
+  return full.filter(Boolean).map((r) => mapBackendIncident(r!));
 }
 
+/** Fetch a single full incident report. */
 export async function fetchIncidentDetail(id: string): Promise<Incident | null> {
-  if (USE_LIVE_API) {
+  if (!USE_LIVE_API) return null;
+  const report = await get<BackendIncidentReport>(`${incidentBase()}/incidents/${id}`);
+  return mapBackendIncident(report);
+}
+
+/** Fetch evidence items for an incident. */
+export async function fetchEvidence(incidentId: string): Promise<Evidence[]> {
+  if (!USE_LIVE_API) return [];
+  const report = await get<BackendIncidentReport>(`${incidentBase()}/incidents/${incidentId}`);
+  return (report.evidence ?? []).map((e) => mapBackendEvidence(e, incidentId));
+}
+
+/** Fetch agent traces synthesised from the report trace metadata. */
+export async function fetchAgentTraces(incidentId: string): Promise<AgentTrace[]> {
+  if (!USE_LIVE_API) return [];
+  const report = await get<BackendIncidentReport>(`${incidentBase()}/incidents/${incidentId}`);
+  return buildAgentTracesFromReport(report, incidentId);
+}
+
+/** Fetch TrueFoundry gateway traces synthesised from the report. */
+export async function fetchTrueFoundryTraces(incidentId: string): Promise<TrueFoundryTrace[]> {
+  if (!USE_LIVE_API) return [];
+  const report = await get<BackendIncidentReport>(`${incidentBase()}/incidents/${incidentId}`);
+  return buildTrueFoundryTracesFromReport(report, incidentId);
+}
+
+// ── Decisions ──────────────────────────────────────────────────────────────────
+
+/** Post an operator decision (approved | rejected). Returns backend response. */
+export async function postIncidentDecision(
+  id: string,
+  decision: "approved" | "rejected",
+  actor = "Operator",
+): Promise<{ status: string; work_order?: Record<string, unknown> }> {
+  if (!USE_LIVE_API) {
+    await delay(500);
+    return { status: "simulated" };
+  }
+  return post(`${incidentBase()}/incidents/${id}/decision`, { decision, actor });
+}
+
+/** Fetch full audit trail for an incident, unwrapping the backend wrapper. */
+export async function fetchAuditTrail(id: string): Promise<AuditEvent[]> {
+  if (!USE_LIVE_API) return [];
+  const response = await get<BackendAuditResponse>(`${incidentBase()}/audit/${id}`);
+  return mapBackendAudit(response);
+}
+
+// ── Scenario runner ────────────────────────────────────────────────────────────
+
+/**
+ * Trigger a live scenario run on the incident API.
+ * The backend streams events to ingestion → crew → report (background).
+ * Returns immediately with event_count.
+ */
+export async function streamScenario(
+  scenarioName: string,
+): Promise<BackendScenarioRunResponse> {
+  if (!USE_LIVE_API) {
+    await delay(300);
+    return { status: "simulated", scenario: scenarioName, scenario_id: "SCN-B", event_count: 0, message: "" };
+  }
+  return post<BackendScenarioRunResponse>(`${incidentBase()}/scenarios/${scenarioName}/run`, {});
+}
+
+/**
+ * Poll GET /api/incidents until a report with the given scenario_id appears,
+ * or until timeoutMs is exceeded.
+ * Returns the mapped Incident, or null on timeout.
+ */
+export async function pollForIncident(
+  scenarioId: string,
+  timeoutMs = 180_000,
+  intervalMs = 3_000,
+): Promise<Incident | null> {
+  if (!USE_LIVE_API) return null;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${BASE_URLS.incident}/incidents/${id}`);
-      if (res.ok) return await res.json();
-    } catch (err) {
-      console.error(`Failed to fetch live incident detail for ${id}`, err);
+      const summaries = await get<BackendIncidentSummary[]>(`${incidentBase()}/incidents`);
+      const match = summaries.find((s) => s.scenario_id === scenarioId);
+      if (match) {
+        const full = await get<BackendIncidentReport>(
+          `${incidentBase()}/incidents/${match.incident_id}`,
+        );
+        return mapBackendIncident(full);
+      }
+    } catch {
+      // network error during poll — keep trying
+    }
+    if (Date.now() + intervalMs < deadline) {
+      await delay(intervalMs);
+    } else {
+      break;
     }
   }
-  await delay(200);
   return null;
 }
 
-export async function postIncidentDecision(id: string, decision: "approved" | "rejected", actor: string): Promise<any> {
-  if (USE_LIVE_API) {
-    try {
-      const res = await fetch(`${BASE_URLS.incident}/incidents/${id}/decision`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision, actor })
-      });
-      if (res.ok) return await res.json();
-    } catch (err) {
-      console.error(`Failed to post decision for incident ${id}`, err);
-    }
-  }
-  await delay(500);
-  return { status: "success", simulated: true };
+// ── Eval ───────────────────────────────────────────────────────────────────────
+
+export interface EvalResults {
+  per_scenario: Record<string, unknown>[];
+  aggregate: {
+    total: number;
+    passed: number;
+    failed: number;
+    root_cause_accuracy: number;
+    false_escalation_rate: number;
+  };
 }
 
-export async function fetchAuditTrail(id: string): Promise<AuditEvent[]> {
-  if (USE_LIVE_API) {
-    try {
-      const res = await fetch(`${BASE_URLS.incident}/audit/${id}`);
-      if (res.ok) return await res.json();
-    } catch (err) {
-      console.error(`Failed to fetch audit trail for ${id}`, err);
-    }
+/** Fetch latest eval results. Returns null if not yet generated. */
+export async function fetchEvalResults(): Promise<EvalResults | null> {
+  if (!USE_LIVE_API) return null;
+  try {
+    return await get<EvalResults>(`${incidentBase()}/eval/results`);
+  } catch {
+    return null;
   }
-  await delay(150);
-  return [];
 }
 
-export async function runLiveAIAnalysis(candidateId: string, payload: any): Promise<any> {
-  if (USE_LIVE_API) {
-    try {
-      const res = await fetch(`${BASE_URLS.crew}/run_incident`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidate_id: candidateId, ...payload })
-      });
-      if (res.ok) return await res.json();
-    } catch (err) {
-      console.error("Failed to trigger live CrewAI analysis", err);
-      throw err;
-    }
-  }
-  await delay(3000);
-  return { status: "simulated" };
-}
+// ── Convenience re-exports ─────────────────────────────────────────────────────
+
+export { scenarioIdToBackendName, scenarioIdToScnId } from "./adapters";

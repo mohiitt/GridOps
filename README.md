@@ -97,6 +97,52 @@ data/               Generated assets, scenarios, eval reports
 | `ENERGY_PRICE_PER_MWH` | Energy price for impact calc | 75 |
 | `ANOMALY_SERVICE_URL` | Anomaly service URL | http://localhost:8001 |
 
+## Full-Stack Demo
+
+### Option A — UI-driven (recommended)
+
+```bash
+# Terminal 1–4: start all backend services
+make run-anomaly &   # port 8001
+make run-ingest  &   # port 8002
+make run-crew    &   # port 8003
+make run-api         # port 8000
+
+# Terminal 5: start frontend in LIVE mode
+cd frontend
+cp .env.local.example .env.local
+# Edit .env.local → set NEXT_PUBLIC_USE_LIVE_API=true
+npm install && npm run dev          # http://localhost:3000
+
+# In the browser:
+# 1. Select "Inverter Cooling Degradation" scenario in the header dropdown
+# 2. Click "Run AI Analysis" — events stream, agents animate, incident appears
+# 3. Click the incident → Approve → work order created + audit trail updates
+```
+
+### Option B — CLI-driven
+
+```bash
+# After all 4 services are up:
+make produce-fast      # instant replay, triggers crew in background
+sleep 120              # wait for 9-agent CrewAI workflow
+curl localhost:8000/api/incidents   # → incident for INV-042
+```
+
+### Option C — All 4 scenarios
+
+```bash
+make run-all-scenarios  # reset → stream → poll per scenario
+make eval               # evaluate against ground truth
+```
+
+### Frontend fixture mode (no backend required)
+
+```bash
+cd frontend && npm install && npm run dev
+# NEXT_PUBLIC_USE_LIVE_API defaults to false → full fixture demo
+```
+
 ## Evaluation
 
 ```bash
