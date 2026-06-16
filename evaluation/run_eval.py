@@ -66,6 +66,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Ensure reports directory exists
+    args.reports.mkdir(parents=True, exist_ok=True)
+
     # Load ground truth
     if not args.ground_truth.exists():
         print(f"ERROR: ground_truth.json not found at {args.ground_truth}")
@@ -117,10 +120,12 @@ def main() -> None:
     # Write output
     eval_output = {"per_scenario": results, "aggregate": agg}
     if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(eval_output, indent=2))
         print(f"\nResults written to {args.output}")
     else:
         default_out = args.reports / "eval_results.json"
+        default_out.parent.mkdir(parents=True, exist_ok=True)
         default_out.write_text(json.dumps(eval_output, indent=2))
         print(f"\nResults written to {default_out}")
 

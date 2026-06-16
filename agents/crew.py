@@ -269,6 +269,7 @@ def assemble_report(
     context: dict[str, Any],
     task_outputs: list[Any],
     start_ms: float,
+    usage_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the §14.5 final incident report from crew task outputs."""
     global _audit_counter
@@ -331,6 +332,22 @@ def assemble_report(
     symptom = tel_out.get("symptom", candidate.get("symptom", "nominal"))
 
     elapsed_ms = int((time.time() - start_ms) * 1000)
+    usage_metrics = usage_metrics or {}
+
+    # Derive trace fields from real metrics when available
+    # CrewAI usage_metrics may contain total_tokens, prompt_tokens, completion_tokens
+    total_tokens = usage_metrics.get("total_tokens", 0)
+    # Cost estimate: gpt-4o-mini ~$0.15/1M input + $0.60/1M output tokens
+    # Use a conservative blended rate of $0.0003 / 1k tokens as estimate
+    if total_tokens:
+        cost_usd = round(total_tokens * 0.0003 / 1000, 6)
+    else:
+        # Fallback: estimate from elapsed time (rough proxy)
+        cost_usd = round(elapsed_ms * 0.0000014, 6)
+
+    # tfy_trace_id: use gateway trace header if forwarded, else generate deterministic id
+    from .llm import is_gateway_configured
+    trace_prefix = "tfy" if is_gateway_configured() else "local"
 
     # Load asset info
     asset_name = context.get("asset_name", f"Asset {asset_id}")
@@ -362,10 +379,11 @@ def assemble_report(
         "governance": governance,
         "operator_briefing": briefing_text,
         "trace": {
-            "tfy_trace_id": f"trace_{inc_id.lower().replace('-', '_')}",
-            "llm_calls": 9,
+            "tfy_trace_id": f"{trace_prefix}_trace_{inc_id.lower().replace('-', '_')}",
+            "llm_calls": len(task_outputs),  # one LLM call per task
             "total_latency_ms": elapsed_ms,
-            "total_cost_usd": round(elapsed_ms * 0.0000014, 4),
+            "total_tokens": total_tokens,
+            "total_cost_usd": cost_usd,
         },
     }
 
@@ -412,7 +430,16 @@ def run_incident(req: RunIncidentRequest) -> dict[str, Any]:
         crew = build_crew(candidate, context)
         result = crew.kickoff()
         task_outputs = crew.tasks
-        report = assemble_report(candidate, context, task_outputs, start_ms)
+
+        # Collect real usage metrics from CrewAI if available
+        usage_metrics: dict[str, Any] = {}
+        try:
+            if hasattr(crew, "usage_metrics") and crew.usage_metrics:
+                usage_metrics = dict(crew.usage_metrics)
+        except Exception:
+            pass
+
+        report = assemble_report(candidate, context, task_outputs, start_ms, usage_metrics)
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Crew execution failed: {exc}")

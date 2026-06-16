@@ -27,6 +27,7 @@ services:
       - "8001:8001"
     environment:
       USE_ML: "false"
+      PYTHONPATH: /app
 
   ingestion_service:
     build:
@@ -36,6 +37,11 @@ services:
       - "8002:8002"
     environment:
       ANOMALY_SERVICE_URL: http://anomaly_service:8001
+      CREW_SERVICE_URL: http://crew_service:8003
+      INCIDENT_API_URL: http://incident_api:8000
+      PYTHONPATH: /app
+    volumes:
+      - ./data:/app/data
 
   crew_service:
     build:
@@ -45,6 +51,13 @@ services:
       - "8003:8003"
     env_file:
       - .env
+    environment:
+      ANOMALY_SERVICE_URL: http://anomaly_service:8001
+      INGESTION_SERVICE_URL: http://ingestion_service:8002
+      INCIDENT_API_URL: http://incident_api:8000
+      PYTHONPATH: /app
+    volumes:
+      - ./data:/app/data
 
   incident_api:
     build:
@@ -52,3 +65,7 @@ services:
       dockerfile: services/incident_api/Dockerfile
     ports:
       - "8000:8000"
+    environment:
+      PYTHONPATH: /app
+    volumes:
+      - ./data:/app/data

@@ -21,6 +21,13 @@ SCENARIOS = [
     "weather_false_positive",
 ]
 
+SCENARIO_IDS = {
+    "normal_operation": "SCN-A",
+    "inverter_cooling_degradation": "SCN-B",
+    "bess_thermal_risk": "SCN-C",
+    "weather_false_positive": "SCN-D",
+}
+
 JSONL_FILES = [
     "telemetry_events.jsonl",
     "alert_events.jsonl",
@@ -100,6 +107,22 @@ def main() -> None:
     if args.sink.startswith("http"):
         session = requests.Session()
         print(f"Streaming to HTTP sink: {args.sink}", file=sys.stderr)
+
+        # Notify the ingestion service of the current scenario context
+        # so it can pass the right scenario_id to the crew when a candidate is emitted.
+        ingest_base = args.sink.rstrip("/ingest").rstrip("/")
+        scenario_id = SCENARIO_IDS.get(args.scenario, "SCN-B")
+        try:
+            ctx_resp = session.post(
+                f"{ingest_base}/set_context",
+                json={"scenario": args.scenario, "scenario_id": scenario_id, "site_id": "SITE-DS-001"},
+                timeout=5,
+            )
+            ctx_resp.raise_for_status()
+            print(f"  Set scenario context: {args.scenario} → {scenario_id}", file=sys.stderr)
+        except Exception as exc:
+            print(f"  [WARN] Could not set context on ingestion service: {exc}", file=sys.stderr)
+
     elif args.sink.startswith("file:"):
         out_path = Path(args.sink[5:])
         out_path.parent.mkdir(parents=True, exist_ok=True)
