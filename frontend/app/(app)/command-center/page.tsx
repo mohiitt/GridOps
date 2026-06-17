@@ -13,7 +13,7 @@ import LiveEventFeed from "@/components/LiveEventFeed";
 
 export default function CommandCenterPage() {
   const router = useRouter();
-  const { activeBundle, incidents, isAnalyzing } = useScenario();
+  const { activeBundle, incidents, isAnalyzing, kpiRevealIndex } = useScenario();
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
 
   // Auto-select first incident when scenario loads
@@ -40,38 +40,28 @@ export default function CommandCenterPage() {
 
   return (
     <div className="space-y-6">
-      {/* 1. KPI Cards Row */}
+      {/* 1. KPI Cards Row — staggered reveal via kpiRevealIndex */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <MetricCard
-          label="Active Incidents"
-          value={kpiData.activeIncidents?.value || "0"}
-          subtext={kpiData.activeIncidents?.subtext}
-          status={kpiData.activeIncidents?.status as any}
-        />
-        <MetricCard
-          label="Alerts Correlated"
-          value={kpiData.alertsCorrelated?.value || "0"}
-          subtext={kpiData.alertsCorrelated?.subtext}
-          status={kpiData.alertsCorrelated?.status as any}
-        />
-        <MetricCard
-          label="Energy at Risk"
-          value={kpiData.energyRisk?.value || "0"}
-          subtext={kpiData.energyRisk?.subtext}
-          status={kpiData.energyRisk?.status as any}
-        />
-        <MetricCard
-          label="Mean Triage Time"
-          value={kpiData.meanTriage?.value || "1.9 min"}
-          trend={kpiData.meanTriage?.trend}
-          status={kpiData.meanTriage?.status as any}
-        />
-        <MetricCard
-          label="Approvals Pending"
-          value={kpiData.approvalsPending?.value || "0"}
-          subtext={kpiData.approvalsPending?.subtext}
-          status={kpiData.approvalsPending?.status as any}
-        />
+        {[
+          { label: "Active Incidents", value: kpiData.activeIncidents?.value || "0", subtext: kpiData.activeIncidents?.subtext, status: kpiData.activeIncidents?.status },
+          { label: "Alerts Correlated", value: kpiData.alertsCorrelated?.value || "—", subtext: kpiData.alertsCorrelated?.subtext, status: kpiData.alertsCorrelated?.status },
+          { label: "Energy at Risk", value: kpiData.energyRisk?.value || "0 MWh", subtext: kpiData.energyRisk?.subtext, status: kpiData.energyRisk?.status },
+          { label: "Mean Triage Time", value: kpiData.meanTriage?.value || "—", trend: kpiData.meanTriage?.trend, status: kpiData.meanTriage?.status },
+          { label: "Approvals Pending", value: kpiData.approvalsPending?.value || "0", subtext: kpiData.approvalsPending?.subtext, status: kpiData.approvalsPending?.status },
+        ].map((card, idx) => (
+          <div
+            key={card.label}
+            className={`transition-all duration-500 ${idx < kpiRevealIndex ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3 pointer-events-none"}`}
+          >
+            <MetricCard
+              label={card.label}
+              value={card.value}
+              subtext={card.subtext}
+              trend={"trend" in card ? card.trend : undefined}
+              status={card.status as any}
+            />
+          </div>
+        ))}
       </div>
 
       {/* Live Event Feed — full width between KPIs and incident queue */}
@@ -91,7 +81,7 @@ export default function CommandCenterPage() {
               </span>
             </div>
 
-            {isAnalyzing && incidents.length === 0 ? (
+            {incidents.length === 0 && isAnalyzing ? (
               <div className="py-20 flex flex-col items-center justify-center space-y-3">
                 <div className="w-8 h-8 border-4 border-[#0EA5E9] border-t-transparent rounded-full animate-spin" />
                 <p className="text-xs text-[#64748B] font-semibold animate-pulse">

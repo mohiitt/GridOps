@@ -10,6 +10,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, Play, Square, Wifi, WifiOff, Radio } from "lucide-react";
+import { useScenario } from "@/providers/ScenarioProvider";
 
 const USE_LIVE_API = process.env.NEXT_PUBLIC_USE_LIVE_API === "true";
 const INGESTION_URL =
@@ -142,6 +143,7 @@ const FIXTURE_EVENTS: LiveEvent[] = [
 type ConnectionStatus = "idle" | "connecting" | "live" | "error";
 
 export default function LiveEventFeed() {
+  const { runAIAnalysis, isAnalyzing } = useScenario();
   const [events, setEvents] = useState<LiveEvent[]>(
     USE_LIVE_API ? [] : FIXTURE_EVENTS,
   );
@@ -154,31 +156,42 @@ export default function LiveEventFeed() {
   const listRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Start live stream: call backend and then poll its status
+  // "Start Live Stream" triggers the entire scripted demo flow
   const handleStart = useCallback(async () => {
-    setStreamLabel("Starting…");
-    setIsStreaming(true);
+    if (isAnalyzing) return;
     setEvents([]);
-    try {
-      await apiStartStream(20, 0.25); // phase1 = 15 seconds, then degrades; auto-stops at 70s
-      setStreamLabel("Streaming ⚡ — degradation in ~15s");
-      // Poll stream status every 5s to detect when it stops
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        const st = await apiStreamStatus();
-        if (st !== "running") {
-          setIsStreaming(false);
-          setStreamLabel(null);
-          if (pollRef.current) clearInterval(pollRef.current);
-        }
-      }, 5_000);
-    } catch (err) {
-      console.error("startLiveStream failed:", err);
-      setStreamLabel("Failed — is the backend running?");
+    setStreamLabel("Starting demo…");
+    setIsStreaming(true);
+    // Let the stream label update, then kick off the full orchestration
+    setTimeout(() => {
+      setStreamLabel("Streaming ⚡ — watch events flow, then AI agents run automatically");
+    }, 500);
+    // runAIAnalysis handles: stream 15s → AI Workflow → Command Centre
+    runAIAnalysis();
+  }, [isAnalyzing, runAIAnalysis]);
+
+  // Detect when the underlying stream process stops
+  useEffect(() => {
+    if (!isStreaming) return;
+    const poll = setInterval(async () => {
+      const st = await apiStreamStatus();
+      if (st !== "running") {
+        setIsStreaming(false);
+        setStreamLabel(null);
+        clearInterval(poll);
+      }
+    }, 3_000);
+    return () => clearInterval(poll);
+  }, [isStreaming]);
+
+  // Track isAnalyzing to keep button state in sync
+  useEffect(() => {
+    if (!isAnalyzing && isStreaming) {
+      // Demo finished — reset stream visual state
       setIsStreaming(false);
-      setTimeout(() => setStreamLabel(null), 4_000);
+      setStreamLabel(null);
     }
-  }, []);
+  }, [isAnalyzing, isStreaming]);
 
   const handleStop = useCallback(async () => {
     await apiStopStream();
@@ -300,7 +313,7 @@ export default function LiveEventFeed() {
           <div className="text-[10px] font-mono">{statusDot}</div>
           {/* Start / Stop button — live mode only */}
           {USE_LIVE_API && (
-            isStreaming ? (
+            isAnalyzing ? (
               <button
                 onClick={handleStop}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-colors"
@@ -340,7 +353,7 @@ export default function LiveEventFeed() {
                   Click <strong className="text-emerald-600">Start Live Stream</strong> to begin
                 </div>
                 <div className="text-[10px] text-slate-300 font-normal">
-                  INV-042 starts normal → degrades after 15s → auto-stops after 70s
+                  15s events → auto AI agents (15s) → Command Centre loads
                 </div>
               </>
             ) : (

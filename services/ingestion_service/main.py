@@ -342,8 +342,8 @@ _live_stream_proc: subprocess.Popen | None = None  # type: ignore[type-arg]
 @app.post("/live-stream/start")
 def start_live_stream(
     speed: float = Query(default=20.0, description="Sim-minutes per real second"),
-    phase1_real_mins: float = Query(default=0.25, description="Real minutes of normal operation before degradation (default=15s)"),
-    max_runtime_secs: float = Query(default=70.0, description="Auto-stop after this many seconds (0=forever)"),
+    phase1_real_mins: float = Query(default=0.1, description="Real minutes of normal operation before degradation (default=6s)"),
+    max_runtime_secs: float = Query(default=15.0, description="Auto-stop after this many seconds (0=forever)"),
 ) -> dict[str, Any]:
     """
     Start the physics-based live event generator (stream_live.py) as a background process.

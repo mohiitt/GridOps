@@ -1,7 +1,7 @@
 "use client";
 
-import React from "react";
-import { usePathname } from "next/navigation";
+import React, { useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useScenario } from "@/providers/ScenarioProvider";
 import {
@@ -13,28 +13,35 @@ import {
   Workflow,
   Gauge,
   ShieldCheck,
-  CheckCircle2,
   Sparkles,
   RefreshCw,
   Clock,
   MapPin,
   Flame,
-  LayoutGrid,
   Wifi,
   WifiOff,
 } from "lucide-react";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const {
-    currentScenarioId,
-    switchScenario,
     runAIAnalysis,
     isAnalyzing,
     analysisStep,
     agentTraces,
     isLiveMode,
+    pendingNavigation,
+    clearPendingNavigation,
   } = useScenario();
+
+  // Auto-navigate when the orchestrator signals a route change
+  useEffect(() => {
+    if (pendingNavigation) {
+      router.push(pendingNavigation);
+      clearPendingNavigation();
+    }
+  }, [pendingNavigation, router, clearPendingNavigation]);
 
   const navItems = [
     { label: "Command Center", icon: LayoutDashboard, href: "/command-center" },
@@ -45,7 +52,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     { label: "AI Workflow", icon: Workflow, href: "/ai-workflow" },
     { label: "Observability", icon: Gauge, href: "/observability" },
     { label: "Governance", icon: ShieldCheck, href: "/governance" },
-    { label: "Evaluation", icon: CheckCircle2, href: "/evaluation" }
   ];
 
   // Map route path to human readable page title
@@ -160,22 +166,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
           {/* Action Selectors and Trigger */}
           <div className="flex items-center gap-3">
-            {/* Scenario Selector Segmented Dropdown */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider hidden lg:inline">
-                Scenario:
-              </span>
-              <select
-                value={currentScenarioId}
-                onChange={(e) => switchScenario(e.target.value as any)}
-                disabled={isAnalyzing}
-                className="text-xs font-semibold bg-white border border-[#CBD5E1] rounded-lg px-3 py-1.5 text-[#0F172A] focus:outline-none focus:ring-2 focus:ring-[#0EA5E9] focus:border-transparent cursor-pointer disabled:bg-slate-50 disabled:cursor-not-allowed"
-              >
-                <option value="normal">Normal Operation</option>
-                <option value="inverter_cooling">Inverter Cooling Degradation</option>
-                <option value="bess_thermal">BESS Thermal Risk</option>
-                <option value="weather_fp">Weather False Positive</option>
-              </select>
+            {/* Scenario label — hardcoded for demo */}
+            <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-50 border border-sky-100 text-xs font-semibold text-[#0369A1]">
+              <Workflow className="w-3.5 h-3.5" />
+              <span>Inverter Cooling Degradation</span>
             </div>
 
             {/* Time range selector */}

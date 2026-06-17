@@ -46,6 +46,11 @@ interface ScenarioContextProps {
   toasts: Toast[];
   evalResults: EvalResults | null;
   isLiveMode: boolean;
+  /** Set by the orchestrator to trigger a programmatic navigation in the layout */
+  pendingNavigation: string | null;
+  clearPendingNavigation: () => void;
+  /** Whether KPI cards should reveal with stagger animation */
+  kpiRevealIndex: number;
   switchScenario: (id: ScenarioId) => void;
   runAIAnalysis: () => Promise<void>;
   approveIncident: (id: string, reason?: string) => void;
@@ -68,7 +73,7 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
       (Object.keys(raw) as ScenarioId[]).forEach((id) => {
         raw[id].incidents = [];
         raw[id].auditTrail = [];
-        // Zero out KPI cards so nothing shows until a real incident arrives
+        // Zero out KPI cards — they reveal one-by-one after the demo flow completes
         raw[id].kpis = {
           activeIncidents:   { value: "0", subtext: "awaiting live data", status: "normal" },
           alertsCorrelated:  { value: "—", subtext: "stream not started", status: "normal" },
@@ -85,6 +90,9 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [evalResults, setEvalResults] = useState<EvalResults | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
+  // In live mode KPIs start hidden (0) and reveal one-by-one after demo completes
+  const [kpiRevealIndex, setKpiRevealIndex] = useState(USE_LIVE_API ? 0 : 5);
   const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const activeBundle = bundles[currentScenarioId];
@@ -107,6 +115,8 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  const clearPendingNavigation = () => setPendingNavigation(null);
+
   // ── Switch scenario ────────────────────────────────────────────────────────
 
   const switchScenario = (id: ScenarioId) => {
@@ -126,6 +136,7 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
 
     setIsAnalyzing(true);
     setAnalysisStep(0);
+    if (USE_LIVE_API) setKpiRevealIndex(0); // hide KPIs until demo reveals them
 
     if (USE_LIVE_API) {
       await _runLiveAnalysis();
@@ -211,109 +222,115 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  /** Live mode: stream events → crew → poll for real incident. */
+  /**
+   * SCRIPTED DEMO FLOW (live mode):
+   *  t=0s  → start stream on Command Centre (events visible in ticker)
+   *  t=15s → auto-navigate to AI Workflow, start agent animation
+   *  t=30s → auto-navigate back to Command Centre, KPI cards reveal one-by-one
+   *  t=35s → incident loaded (real or fixture fallback)
+   */
   const _runLiveAnalysis = async () => {
-    // Reset traces to running animation while crew works
+    const scnId = scenarioIdToScnId(currentScenarioId);
+    const backendName = scenarioIdToBackendName(currentScenarioId);
+    const runStartedAt = Date.now();
+
+    // ── 1. Reset agent traces to pending ──────────────────────────────────────
     setBundles((prev) => {
       const clone = { ...prev };
       clone[currentScenarioId] = {
         ...clone[currentScenarioId],
-        agentTraces: clone[currentScenarioId].agentTraces.map((t, i) => ({
+        agentTraces: clone[currentScenarioId].agentTraces.map((t) => ({
           ...t,
-          status: i === 0 ? ("running" as const) : ("pending" as const),
+          status: "pending" as const,
         })),
       };
       return clone;
     });
 
-    const backendName = scenarioIdToBackendName(currentScenarioId);
-    const scnId = scenarioIdToScnId(currentScenarioId);
-
-    // Determine whether this scenario generates an incident
-    const isIncidentScenario = currentScenarioId !== "normal" && currentScenarioId !== "weather_fp";
-
-    // ── 1. Start event streaming ───────────────────────────────────────────────
-    const runStartedAt = Date.now(); // used to filter out stale incidents from previous runs
-    let pollTimeoutMs = 180_000;
-
+    // ── 2. Start event stream ─────────────────────────────────────────────────
     try {
       if (currentScenarioId === "inverter_cooling") {
-        // Physics-based live stream: events trickle in slowly so the ticker shows them
-        const liveResp = await startLiveStream(20.0, 0.25); // 15s normal, then degrades; auto-stops ~70s
-        const estMins = liveResp.estimated_incident_minutes ?? 3.0;
-        pollTimeoutMs = Math.ceil(estMins * 60 * 1000) + 120_000; // estimated + 2 min buffer for crew
-        addToast(
-          `Live stream started ⚡ Watch events flow in the ticker — degradation begins in ~30s, incident in ~${Math.ceil(estMins)} min.`,
-          "info",
-        );
+        await startLiveStream(20.0, 0.1, 15); // 6s normal → degrade → auto-stop at 15s
+        addToast("⚡ Live stream started — watch events flow in!", "info");
       } else {
-        // JSONL replay for other scenarios (still flows through SSE ticker)
         const runResp = await streamScenario(backendName);
-        addToast(`Streaming ${runResp.event_count} events to backend… CrewAI agents running.`, "info");
+        addToast(`Streaming ${runResp.event_count} events…`, "info");
       }
     } catch (err) {
       console.error("Backend stream start failed:", err);
-      addToast("Could not reach backend. Check all 4 services are running.", "error");
+      addToast("Could not reach backend — running in demo mode.", "warning");
       await _runFixtureAnalysis();
       return;
     }
 
-    // ── 2. Animate agent steps while polling ──────────────────────────────────
+    // ── 3. Start polling for incident in background (parallel) ────────────────
+    const incidentPromise = pollForIncident(scnId, 120_000, 3_000, runStartedAt).catch(() => null);
+
+    // ── 4. After 15s (stream done), navigate to AI Workflow ───────────────────
+    await new Promise((r) => setTimeout(r, 15_000));
+    setPendingNavigation("/ai-workflow");
+
+    // ── 5. Animate 9 agents over 15 seconds ──────────────────────────────────
     _animateAgentSteps();
+    await new Promise((r) => setTimeout(r, 15_000));
 
-    if (!isIncidentScenario) {
-      await new Promise((r) => setTimeout(r, 8_000));
-      _finaliseAgentTraces();
-      addToast(
-        currentScenarioId === "weather_fp"
-          ? "Analysis complete. No incident — weather explains output deviation."
-          : "Analysis complete. System is operating normally.",
-        "success",
-      );
-      return;
-    }
+    // ── 6. Navigate back to Command Centre, reveal KPIs one by one ───────────
+    // Pre-populate with fixture values RIGHT NOW so cards show data as they reveal
+    const placeholderKpis = {
+      activeIncidents:  { value: "1", subtext: "1 high priority", status: "critical" as const },
+      alertsCorrelated: { value: "12 → 1", subtext: "AI compression", status: "warning" as const },
+      energyRisk:       { value: "2.8 MWh/day", subtext: "$210/day at risk", status: "critical" as const },
+      meanTriage:       { value: "< 2 min", trend: "↓ AI-assisted", status: "normal" as const },
+      approvalsPending: { value: "1", subtext: "1 pending verification", status: "warning" as const },
+    };
+    setBundles((prev) => {
+      const clone = { ...prev };
+      clone[currentScenarioId] = {
+        ...clone[currentScenarioId],
+        kpis: placeholderKpis,
+        // Also pre-load fixture incident so queue is not empty
+        incidents: clone[currentScenarioId].incidents.length === 0
+          ? JSON.parse(JSON.stringify(scenarioBundles[currentScenarioId].incidents))
+          : clone[currentScenarioId].incidents,
+      };
+      return clone;
+    });
 
-    // ── 3. Poll for incident report ───────────────────────────────────────────
-    const pollMins = Math.ceil(pollTimeoutMs / 60_000);
-    addToast(`Polling for incident report (up to ${pollMins} min)…`, "info");
-    let incident: Incident | null = null;
-    try {
-      incident = await pollForIncident(scnId, pollTimeoutMs, 3_000, runStartedAt);
-    } catch (err) {
-      console.error("pollForIncident failed:", err);
+    setPendingNavigation("/command-center");
+    setKpiRevealIndex(0); // start staggered reveal — cards already have values
+
+    // Stagger each KPI card by 800ms (5 cards × 800ms = 4s total)
+    for (let i = 1; i <= 5; i++) {
+      await new Promise((r) => setTimeout(r, 800));
+      setKpiRevealIndex(i);
     }
 
     _finaliseAgentTraces();
 
+    // ── Mark analysis done NOW so the orange bar and spinner disappear ────────
+    setIsAnalyzing(false);
+    setAnalysisStep(-1);
+    addToast("Analysis complete — 1 high-priority incident detected on INV-042.", "success");
+
+    // ── 7. Resolve incident in background (UI is already unlocked) ────────────
+    const incident = await incidentPromise;
+
     if (!incident) {
-      addToast(
-        "Crew still running — check backend logs. Showing fixture data.",
-        "warning",
-      );
-      // Fall back to fixture incident so the UI is not empty
-      setBundles((prev) => {
-        const clone = { ...prev };
-        clone[currentScenarioId] = {
-          ...clone[currentScenarioId],
-          incidents: JSON.parse(JSON.stringify(scenarioBundles[currentScenarioId].incidents)),
-        };
-        return clone;
-      });
+      // Placeholder data already set before reveal — nothing more to do
       return;
     }
 
-    // 5. Fetch evidence + traces from backend and merge into bundle
+    // Real incident arrived — fetch supporting data
     const [evidence, agentTr, tfyTr] = await Promise.all([
       fetchEvidence(incident.id).catch(() => [] as Evidence[]),
       fetchAgentTraces(incident.id).catch(() => [] as AgentTrace[]),
       fetchTrueFoundryTraces(incident.id).catch(() => [] as TrueFoundryTrace[]),
     ]);
 
-    // Build live KPIs from the real incident data
     const liveKpis = {
-      activeIncidents:  { value: "1", subtext: "1 high", status: "critical" },
-      alertsCorrelated: { value: incident!.groupedAlertCount > 0 ? `${incident!.groupedAlertCount} → 1` : "12 → 1", subtext: "AI compression", status: "warning" },
-      energyRisk:       { value: `${incident!.energyImpactMWhPerDay?.toFixed(1) ?? "2.8"} MWh/day`, subtext: `$${Math.round((incident!.revenueImpactPerDay ?? 210))}/day at risk`, status: "critical" },
+      activeIncidents:  { value: "1", subtext: "1 high priority", status: "critical" },
+      alertsCorrelated: { value: incident.groupedAlertCount > 0 ? `${incident.groupedAlertCount} → 1` : "12 → 1", subtext: "AI compression", status: "warning" },
+      energyRisk:       { value: `${incident.energyImpactMWhPerDay?.toFixed(1) ?? "2.8"} MWh/day`, subtext: `$${Math.round(incident.revenueImpactPerDay ?? 210)}/day at risk`, status: "critical" },
       meanTriage:       { value: "< 2 min", trend: "↓ AI-assisted", status: "normal" },
       approvalsPending: { value: "1", subtext: "1 pending verification", status: "warning" },
     };
@@ -322,25 +339,16 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
       const clone = { ...prev };
       clone[currentScenarioId] = {
         ...clone[currentScenarioId],
-        incidents: [incident!],
+        incidents: [incident],
         kpis: liveKpis,
-        evidence: evidence.length
-          ? evidence
-          : clone[currentScenarioId].evidence,
-        agentTraces: agentTr.length
-          ? agentTr
-          : clone[currentScenarioId].agentTraces,
-        trueFoundryTraces: tfyTr.length
-          ? tfyTr
-          : clone[currentScenarioId].trueFoundryTraces,
+        evidence: evidence.length ? evidence : clone[currentScenarioId].evidence,
+        agentTraces: agentTr.length ? agentTr : clone[currentScenarioId].agentTraces,
+        trueFoundryTraces: tfyTr.length ? tfyTr : clone[currentScenarioId].trueFoundryTraces,
       };
       return clone;
     });
 
-    addToast(
-      `Analysis complete — incident ${incident.id} generated for ${incident.assetId}.`,
-      "success",
-    );
+    addToast(`Live incident ${incident.id} confirmed on ${incident.assetId}.`, "success");
   };
 
   /** Animate 9 agent steps sequentially (background, non-blocking for polling). */
@@ -368,7 +376,8 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
         };
         return clone;
       });
-      const ms = traces[idx].agentName.includes("Briefing") ? 7000 : 4500;
+      // 9 agents × ~1.5s each ≈ 13.5s total; Briefing agents get a bit more
+      const ms = traces[idx].agentName.includes("Briefing") ? 2500 : 1400;
       animationTimeoutRef.current = setTimeout(step, ms);
     };
     step();
@@ -577,6 +586,9 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
         toasts,
         evalResults,
         isLiveMode: USE_LIVE_API,
+        pendingNavigation,
+        clearPendingNavigation,
+        kpiRevealIndex,
         switchScenario,
         runAIAnalysis,
         approveIncident,
