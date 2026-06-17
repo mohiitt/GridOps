@@ -4,7 +4,7 @@
   "site_id": "SITE-DS-001",
   "asset_id": "BESS-011",
   "asset_name": "BESS Unit 011",
-  "created_at": "2026-06-16T22:47:10Z",
+  "created_at": "2026-06-16T23:27:32Z",
   "status": "awaiting_approval",
   "title": "BESS thermal management risk on BESS-011",
   "root_cause": "bess_thermal_management_degradation",
@@ -48,13 +48,13 @@
     "escalation_level": "site_engineer",
     "requires_immediate": true,
     "decision": null,
-    "audit_id": "AUD-0003"
+    "audit_id": "AUD-0001"
   },
   "operator_briefing": "Battery Energy Storage System BESS-011 is experiencing a critical thermal management risk. Multiple battery cells within Module B7 have exceeded the safety threshold of 55\u00b0C, reaching a peak of 68\u00b0C under a high dispatch discharge load. The cooling loop pressure dropped from 3.2 bar to 1.1 bar, indicating a probable coolant leak. Safety policies require human intervention to authorize dispatch of site personnel for manual inspection and potential module isolation to prevent thermal runaway.",
   "trace": {
     "tfy_trace_id": "mock_trace_inc_bess011_20260616",
     "llm_calls": 9,
-    "total_latency_ms": 319,
+    "total_latency_ms": 2167,
     "total_tokens": 15000,
     "total_cost_usd": 0.0045
   }

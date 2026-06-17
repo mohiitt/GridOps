@@ -15,6 +15,8 @@ import { scenarioBundles } from "../data/scenarios";
 import {
   USE_LIVE_API,
   streamScenario,
+  startLiveStream,
+  stopLiveStream,
   pollForIncident,
   postIncidentDecision,
   fetchAuditTrail,
@@ -59,9 +61,25 @@ const ScenarioContext = createContext<ScenarioContextProps | undefined>(undefine
 
 export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
   const [currentScenarioId, setCurrentScenarioId] = useState<ScenarioId>("inverter_cooling");
-  const [bundles, setBundles] = useState<Record<ScenarioId, ScenarioBundle>>(() =>
-    JSON.parse(JSON.stringify(scenarioBundles)),
-  );
+  const [bundles, setBundles] = useState<Record<ScenarioId, ScenarioBundle>>(() => {
+    const raw: Record<ScenarioId, ScenarioBundle> = JSON.parse(JSON.stringify(scenarioBundles));
+    if (USE_LIVE_API) {
+      // In live mode start with empty queues — real data comes from the backend
+      (Object.keys(raw) as ScenarioId[]).forEach((id) => {
+        raw[id].incidents = [];
+        raw[id].auditTrail = [];
+        // Zero out KPI cards so nothing shows until a real incident arrives
+        raw[id].kpis = {
+          activeIncidents:   { value: "0", subtext: "awaiting live data", status: "normal" },
+          alertsCorrelated:  { value: "—", subtext: "stream not started", status: "normal" },
+          energyRisk:        { value: "0 MWh", subtext: "no active incident", status: "normal" },
+          meanTriage:        { value: "—", status: "normal" },
+          approvalsPending:  { value: "0", subtext: "no pending items", status: "normal" },
+        };
+      });
+    }
+    return raw;
+  });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState(-1);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -195,8 +213,6 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
 
   /** Live mode: stream events → crew → poll for real incident. */
   const _runLiveAnalysis = async () => {
-    addToast("Streaming events to backend…", "info");
-
     // Reset traces to running animation while crew works
     setBundles((prev) => {
       const clone = { ...prev };
@@ -210,32 +226,43 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
       return clone;
     });
 
-    // 1. Trigger backend scenario run
     const backendName = scenarioIdToBackendName(currentScenarioId);
     const scnId = scenarioIdToScnId(currentScenarioId);
 
-    let eventCount = 0;
+    // Determine whether this scenario generates an incident
+    const isIncidentScenario = currentScenarioId !== "normal" && currentScenarioId !== "weather_fp";
+
+    // ── 1. Start event streaming ───────────────────────────────────────────────
+    const runStartedAt = Date.now(); // used to filter out stale incidents from previous runs
+    let pollTimeoutMs = 180_000;
+
     try {
-      const runResp = await streamScenario(backendName);
-      eventCount = runResp.event_count;
-      addToast(`Streaming ${eventCount} events… CrewAI agents running.`, "info");
+      if (currentScenarioId === "inverter_cooling") {
+        // Physics-based live stream: events trickle in slowly so the ticker shows them
+        const liveResp = await startLiveStream(20.0, 0.25); // 15s normal, then degrades; auto-stops ~70s
+        const estMins = liveResp.estimated_incident_minutes ?? 3.0;
+        pollTimeoutMs = Math.ceil(estMins * 60 * 1000) + 120_000; // estimated + 2 min buffer for crew
+        addToast(
+          `Live stream started ⚡ Watch events flow in the ticker — degradation begins in ~30s, incident in ~${Math.ceil(estMins)} min.`,
+          "info",
+        );
+      } else {
+        // JSONL replay for other scenarios (still flows through SSE ticker)
+        const runResp = await streamScenario(backendName);
+        addToast(`Streaming ${runResp.event_count} events to backend… CrewAI agents running.`, "info");
+      }
     } catch (err) {
-      console.error("streamScenario failed:", err);
-      addToast("Could not reach backend. Check services are running.", "error");
-      // Fall back to fixture animation
+      console.error("Backend stream start failed:", err);
+      addToast("Could not reach backend. Check all 4 services are running.", "error");
       await _runFixtureAnalysis();
       return;
     }
 
-    // 2. Animate agent steps while polling
+    // ── 2. Animate agent steps while polling ──────────────────────────────────
     _animateAgentSteps();
 
-    // 3. For non-incident scenarios (normal, weather_fp) don't poll
-    const isIncidentScenario = currentScenarioId !== "normal" && currentScenarioId !== "weather_fp";
-
     if (!isIncidentScenario) {
-      // Wait for streaming to finish (~eventCount * 5ms)
-      await new Promise((r) => setTimeout(r, Math.min(eventCount * 5 + 3000, 15_000)));
+      await new Promise((r) => setTimeout(r, 8_000));
       _finaliseAgentTraces();
       addToast(
         currentScenarioId === "weather_fp"
@@ -246,11 +273,12 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    // 4. Poll for incident report (up to 3 min)
-    addToast("Polling for incident report (up to 3 min)…", "info");
+    // ── 3. Poll for incident report ───────────────────────────────────────────
+    const pollMins = Math.ceil(pollTimeoutMs / 60_000);
+    addToast(`Polling for incident report (up to ${pollMins} min)…`, "info");
     let incident: Incident | null = null;
     try {
-      incident = await pollForIncident(scnId, 180_000);
+      incident = await pollForIncident(scnId, pollTimeoutMs, 3_000, runStartedAt);
     } catch (err) {
       console.error("pollForIncident failed:", err);
     }
@@ -281,11 +309,21 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
       fetchTrueFoundryTraces(incident.id).catch(() => [] as TrueFoundryTrace[]),
     ]);
 
+    // Build live KPIs from the real incident data
+    const liveKpis = {
+      activeIncidents:  { value: "1", subtext: "1 high", status: "critical" },
+      alertsCorrelated: { value: incident!.groupedAlertCount > 0 ? `${incident!.groupedAlertCount} → 1` : "12 → 1", subtext: "AI compression", status: "warning" },
+      energyRisk:       { value: `${incident!.energyImpactMWhPerDay?.toFixed(1) ?? "2.8"} MWh/day`, subtext: `$${Math.round((incident!.revenueImpactPerDay ?? 210))}/day at risk`, status: "critical" },
+      meanTriage:       { value: "< 2 min", trend: "↓ AI-assisted", status: "normal" },
+      approvalsPending: { value: "1", subtext: "1 pending verification", status: "warning" },
+    };
+
     setBundles((prev) => {
       const clone = { ...prev };
       clone[currentScenarioId] = {
         ...clone[currentScenarioId],
         incidents: [incident!],
+        kpis: liveKpis,
         evidence: evidence.length
           ? evidence
           : clone[currentScenarioId].evidence,
@@ -330,7 +368,7 @@ export const ScenarioProvider = ({ children }: { children: ReactNode }) => {
         };
         return clone;
       });
-      const ms = traces[idx].agentName.includes("Briefing") ? 9000 : 6000;
+      const ms = traces[idx].agentName.includes("Briefing") ? 7000 : 4500;
       animationTimeoutRef.current = setTimeout(step, ms);
     };
     step();

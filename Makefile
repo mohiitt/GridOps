@@ -22,6 +22,12 @@ produce:
 produce-fast:
 	python scripts/produce_events.py --scenario inverter_cooling_degradation --speed 999999 --sink http://localhost:8002/ingest
 
+stream-live:
+	python scripts/stream_live.py --speed 20 --phase1-real-mins 2
+
+stream-live-fast:
+	python scripts/stream_live.py --speed 60 --phase1-real-mins 1
+
 run-all-scenarios:
 	python scripts/run_all_scenarios.py --ingestion-url http://localhost:8002 --api-url http://localhost:8000 --timeout 180
 

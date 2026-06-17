@@ -9,6 +9,7 @@ import { formatCurrency, formatEnergy, formatPercent } from "@/lib/format";
 import { ShieldAlert, ArrowRight, Eye, ShieldCheck, Cpu } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import LiveEventFeed from "@/components/LiveEventFeed";
 
 export default function CommandCenterPage() {
   const router = useRouter();
@@ -72,6 +73,9 @@ export default function CommandCenterPage() {
           status={kpiData.approvalsPending?.status as any}
         />
       </div>
+
+      {/* Live Event Feed — full width between KPIs and incident queue */}
+      <LiveEventFeed />
 
       {/* Main Grid: Left List + Right Brief */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

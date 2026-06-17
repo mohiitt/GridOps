@@ -4,7 +4,7 @@
   "site_id": "SITE-DS-001",
   "asset_id": "INV-042",
   "asset_name": "Solar Inverter 042",
-  "created_at": "2026-06-16T22:47:10Z",
+  "created_at": "2026-06-16T23:12:28Z",
   "status": "awaiting_approval",
   "title": "Cooling subsystem degradation on Solar Inverter INV-042",
   "root_cause": "cooling_subsystem_degradation",
@@ -18,8 +18,8 @@
     "ALT-INV-042-0011",
     "ALT-INV-042-0012",
     "ALT-INV-042-0013",
-    "ALT-INV-042-0003",
     "ALT-INV-042-0002",
+    "ALT-INV-042-0008",
     "ALT-INV-042-0014",
     "ALT-INV-042-0015",
     "ALT-INV-042-0016",
@@ -70,7 +70,7 @@
   "trace": {
     "tfy_trace_id": "mock_trace_inc_inv042_20260616",
     "llm_calls": 9,
-    "total_latency_ms": 240,
+    "total_latency_ms": 1233,
     "total_tokens": 15000,
     "total_cost_usd": 0.0045
   }

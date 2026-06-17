@@ -117,27 +117,74 @@ for port in 3000 8000 8001 8002 8003; do
   kill_port "$port"
 done
 
+# Load environment variables for services (TFY credentials, service URLs, etc.)
+set -a
+# shellcheck source=/dev/null
+source .env
+set +a
+
+REPO_ROOT="$(pwd)"
+
 echo "Starting microservices..."
 
 # 1. Anomaly Scoring Service (Port 8001)
-"$VENV_DIR/bin/uvicorn" services.anomaly_service.main:app --port 8001 > /dev/null 2>&1 &
+PYTHONPATH="$REPO_ROOT" "$VENV_DIR/bin/uvicorn" services.anomaly_service.main:app \
+  --port 8001 --log-level warning > /tmp/gridops-anomaly.log 2>&1 &
 PIDS+=($!)
 echo " - Anomaly Service started on port 8001 (PID $!)"
 
 # 2. Event Ingestion Service (Port 8002)
-"$VENV_DIR/bin/uvicorn" services.ingestion_service.main:app --port 8002 > /dev/null 2>&1 &
+PYTHONPATH="$REPO_ROOT" "$VENV_DIR/bin/uvicorn" services.ingestion_service.main:app \
+  --port 8002 --log-level warning > /tmp/gridops-ingestion.log 2>&1 &
 PIDS+=($!)
 echo " - Ingestion Service started on port 8002 (PID $!)"
 
 # 3. CrewAI Workflow Service (Port 8003)
-"$VENV_DIR/bin/uvicorn" agents.crew:app --port 8003 > /dev/null 2>&1 &
+PYTHONPATH="$REPO_ROOT" "$VENV_DIR/bin/uvicorn" agents.crew:app \
+  --port 8003 --log-level warning > /tmp/gridops-crew.log 2>&1 &
 PIDS+=($!)
 echo " - CrewAI Workflow Service started on port 8003 (PID $!)"
 
 # 4. Incident Report API (Port 8000)
-"$VENV_DIR/bin/uvicorn" services.incident_api.main:app --port 8000 > /dev/null 2>&1 &
+PYTHONPATH="$REPO_ROOT" "$VENV_DIR/bin/uvicorn" services.incident_api.main:app \
+  --port 8000 --log-level warning > /tmp/gridops-api.log 2>&1 &
 PIDS+=($!)
 echo " - Incident API Service started on port 8000 (PID $!)"
+
+# Wait for all 4 backend services to be healthy before starting frontend
+echo ""
+echo "Waiting for backend services to be ready..."
+READY=0
+for i in $(seq 1 30); do
+  sleep 1
+  UP=0
+  for port in 8000 8001 8002 8003; do
+    if curl -sf "http://localhost:$port/health" > /dev/null 2>&1; then
+      UP=$((UP+1))
+    fi
+  done
+  if [ "$UP" -eq 4 ]; then
+    READY=1
+    break
+  fi
+  printf "  %ds — %d/4 services up...\r" "$i" "$UP"
+done
+
+if [ "$READY" -eq 0 ]; then
+  echo ""
+  echo "WARNING: Not all services came up. Check logs:"
+  echo "  tail /tmp/gridops-anomaly.log /tmp/gridops-ingestion.log /tmp/gridops-crew.log /tmp/gridops-api.log"
+else
+  echo "  All 4 backend services are healthy ✓"
+fi
+
+# Ensure frontend .env.local has all required vars
+cat > frontend/.env.local << 'EOF'
+NEXT_PUBLIC_USE_LIVE_API=true
+NEXT_PUBLIC_INCIDENT_API_URL=http://localhost:8000
+NEXT_PUBLIC_INGESTION_API_URL=http://localhost:8002
+NEXT_PUBLIC_CREW_API_URL=http://localhost:8003
+EOF
 
 # 5. Next.js Frontend Server (Port 3000)
 echo "Starting Next.js Frontend Dev Server..."
@@ -148,6 +195,9 @@ echo " - Frontend Server started on port 3000 (PID $!)"
 echo ""
 echo "=== All services are running! ==="
 echo "👉 Open your browser to http://localhost:3000"
+echo "👉 Select 'Inverter Cooling Degradation' → click 'Run AI Analysis'"
+echo "👉 Watch live events flow in the ticker for ~2 min, then incident auto-appears"
+echo "👉 Service logs: /tmp/gridops-*.log"
 echo "👉 Press Ctrl+C in this terminal to stop all services."
 echo ""
 

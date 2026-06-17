@@ -160,12 +160,14 @@ export async function streamScenario(
 /**
  * Poll GET /api/incidents until a report with the given scenario_id appears,
  * or until timeoutMs is exceeded.
+ * Pass `startedAfterMs` (epoch ms) to ignore stale incidents from previous runs.
  * Returns the mapped Incident, or null on timeout.
  */
 export async function pollForIncident(
   scenarioId: string,
   timeoutMs = 180_000,
   intervalMs = 3_000,
+  startedAfterMs?: number,
 ): Promise<Incident | null> {
   if (!USE_LIVE_API) return null;
 
@@ -173,7 +175,16 @@ export async function pollForIncident(
   while (Date.now() < deadline) {
     try {
       const summaries = await get<BackendIncidentSummary[]>(`${incidentBase()}/incidents`);
-      const match = summaries.find((s) => s.scenario_id === scenarioId);
+      const match = summaries.find((s) => {
+        if (s.scenario_id !== scenarioId) return false;
+        // Ignore incidents created before this run started (stale from previous runs)
+        if (startedAfterMs && s.created_at) {
+          const incidentMs = new Date(s.created_at).getTime();
+          // Allow 60s buffer in case backend clock is slightly behind
+          return incidentMs >= startedAfterMs - 60_000;
+        }
+        return true;
+      });
       if (match) {
         const full = await get<BackendIncidentReport>(
           `${incidentBase()}/incidents/${match.incident_id}`,
@@ -190,6 +201,45 @@ export async function pollForIncident(
     }
   }
   return null;
+}
+
+// ── Live stream control ────────────────────────────────────────────────────────
+
+export interface LiveStreamResponse {
+  status: string;
+  pid?: number;
+  speed?: number;
+  phase1_real_mins?: number;
+  estimated_incident_minutes?: number;
+}
+
+/**
+ * Start the physics-based live event generator on the ingestion service.
+ * Events will appear in the SSE /events/stream ticker in real time.
+ * The story arc: normal operation for phase1_real_mins, then INV-042 starts degrading.
+ */
+export async function startLiveStream(
+  speed = 20.0,
+  phase1RealMins = 2.0,
+): Promise<LiveStreamResponse> {
+  if (!USE_LIVE_API) {
+    await delay(300);
+    return { status: "simulated", estimated_incident_minutes: phase1RealMins + 2.5 };
+  }
+  return post<LiveStreamResponse>(
+    `${ingestionBase()}/live-stream/start?speed=${speed}&phase1_real_mins=${phase1RealMins}`,
+    {},
+  );
+}
+
+/** Stop the live stream generator. */
+export async function stopLiveStream(): Promise<void> {
+  if (!USE_LIVE_API) return;
+  try {
+    await post(`${ingestionBase()}/live-stream/stop`, {});
+  } catch {
+    // ignore — best-effort stop
+  }
 }
 
 // ── Eval ───────────────────────────────────────────────────────────────────────
