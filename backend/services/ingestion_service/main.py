@@ -61,6 +61,69 @@ async def _capture_loop() -> None:
     """Store the running event loop so sync handlers can schedule onto it."""
     global _main_loop
     _main_loop = asyncio.get_event_loop()
+    # Start optional Kafka consumer if configured
+    _kafka_bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "").strip()
+    if _kafka_bootstrap:
+        asyncio.create_task(_kafka_consumer_loop(_kafka_bootstrap))
+        logger.info("Kafka consumer task started → %s", _kafka_bootstrap)
+    else:
+        logger.info("KAFKA_BOOTSTRAP_SERVERS not set — Kafka consumer disabled (HTTP-only mode)")
+
+
+async def _kafka_consumer_loop(bootstrap_servers: str) -> None:
+    """
+    Background task: consumes events from Kafka topic `gridops.raw.events`
+    and feeds them through the same ingest pipeline as the HTTP endpoint.
+    Only active when KAFKA_BOOTSTRAP_SERVERS is configured.
+    """
+    topic = os.environ.get("KAFKA_TOPIC", "gridops.raw.events")
+    group_id = os.environ.get("KAFKA_CONSUMER_GROUP", "gridops-ingestion")
+
+    try:
+        from confluent_kafka import Consumer, KafkaException
+    except ImportError:
+        logger.warning("confluent-kafka not installed — Kafka consumer unavailable")
+        return
+
+    conf = {
+        "bootstrap.servers": bootstrap_servers,
+        "group.id": group_id,
+        "auto.offset.reset": "latest",
+        "enable.auto.commit": True,
+        "session.timeout.ms": 10_000,
+    }
+
+    consumer = Consumer(conf)
+    consumer.subscribe([topic])
+    logger.info("Kafka consumer subscribed to topic=%s group=%s", topic, group_id)
+
+    loop = asyncio.get_event_loop()
+    try:
+        while True:
+            # Poll in a thread pool so we don't block the event loop
+            msg = await loop.run_in_executor(None, lambda: consumer.poll(timeout=1.0))
+            if msg is None:
+                continue
+            if msg.error():
+                from confluent_kafka import KafkaError
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    continue
+                logger.error("Kafka consumer error: %s", msg.error())
+                continue
+
+            try:
+                raw = json.loads(msg.value().decode("utf-8"))
+                envelope = Envelope(**raw)
+                # Reuse the same ingest pipeline — non-blocking call
+                await loop.run_in_executor(None, lambda e=envelope: _process_envelope(e))
+                logger.debug("Kafka event ingested: %s %s", envelope.event_type, envelope.asset_id)
+            except Exception as exc:
+                logger.warning("Kafka message parse/ingest failed: %s", exc)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        consumer.close()
+        logger.info("Kafka consumer closed")
 
 
 def _broadcast_sync(summary: dict[str, Any]) -> None:
@@ -230,6 +293,39 @@ def ingest(envelope: Envelope, background_tasks: BackgroundTasks) -> IngestRespo
         candidates_emitted=1 if candidate else 0,
         candidate_id=candidate["candidate_id"] if candidate else None,
     )
+
+
+def _process_envelope(envelope: Envelope) -> None:
+    """
+    Shared processing pipeline for both HTTP /ingest and Kafka consumer.
+    Mutates global state; caller must not hold the GIL across threads.
+    """
+    import threading
+    # Reuse the HTTP ingest logic in a thread-safe way via a fake BackgroundTasks
+    asset_id = envelope.asset_id or envelope.site_id
+    if asset_id not in _scenario_window_start:
+        _scenario_window_start[asset_id] = envelope.timestamp
+
+    route_event(envelope.model_dump(), store)
+
+    candidate = None
+    if envelope.event_type == "alert" and envelope.asset_id:
+        window_start = _scenario_window_start.get(envelope.asset_id, envelope.timestamp)
+        candidate = correlation.on_new_alert(
+            asset_id=envelope.asset_id,
+            envelope_timestamp=envelope.timestamp,
+            store=store,
+            window_start=window_start,
+        )
+
+    if candidate:
+        context = {**_scenario_context}
+        thread = threading.Thread(
+            target=dispatch_to_crew, args=(candidate, context), daemon=True
+        )
+        thread.start()
+
+    _broadcast_sync(_make_broadcast_summary(envelope, candidate))
 
 
 def _make_broadcast_summary(envelope: Envelope, candidate: Any) -> dict[str, Any]:

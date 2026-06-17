@@ -1,161 +1,250 @@
 # GridOps Copilot
 
-**Tagline:** From renewable-energy alert noise to actionable incident intelligence.
+> **AI-powered operations copilot for renewable energy infrastructure**  
+> Hackathon: *TrueFoundry × CrewAI — From Prototype to Production: Real-World AI Agents*
 
-**Hackathon:** TrueFoundry × CrewAI — *From Prototype to Production: Real-World AI Agents*
+---
 
-GridOps Copilot is an AI operations copilot for renewable-energy operators managing a 500 MW solar + BESS portfolio. It ingests high-volume, disconnected SCADA signals and produces a single explainable incident per asset cluster.
+## 1. Problem & Use Case
+
+### The Problem
+
+Utility-scale renewable energy facilities (solar farms, BESS) generate thousands of raw
+sensor alerts every hour. A 500 MW facility can fire **12+ overlapping SCADA alerts** from
+a single inverter fault — temperature spikes, fan failures, power deviations — all
+arriving within minutes of each other. Today, operators:
+
+- Manually triage each alert in isolation
+- Miss correlated root causes buried in alert noise
+- React hours later, after MWh of generation is already lost
+- Have no structured way to enforce governance (who approved taking an asset offline?)
+
+### Our Solution
+
+**GridOps Copilot** ingests real-time telemetry, compresses alert noise, and deploys a
+9-agent CrewAI crew that produces **one explainable incident per asset** — with root cause,
+business impact, recommended action, and a governance gate for human approval.
 
 ```
-Many raw alerts + telemetry + maintenance + weather/forecast
-        ↓ (anomaly scoring + correlation + CrewAI multi-agent reasoning)
-One explainable incident:
-  root cause · evidence · priority · business impact · recommended action · governance
+Raw SCADA stream (telemetry + alerts + weather + forecast)
+        ↓
+Anomaly Scoring + Alert Correlation Engine
+        ↓
+9-Agent CrewAI Pipeline (via TrueFoundry AI Gateway)
+        ↓
+ONE Actionable Incident:
+  root cause · confidence · evidence · energy loss (MWh/day)
+  recommended action · governance gate · operator briefing
 ```
 
-## Quick Start
+### Why It Matters
+
+| Metric | Without GridOps | With GridOps |
+|--------|----------------|-------------|
+| Alerts to review | 12+ raw alerts | 1 incident |
+| Time to triage | 45–90 minutes | < 2 minutes |
+| Root cause clarity | Manual correlation | AI-generated with evidence |
+| Governance | Ad-hoc | Structured approval gate |
+| Revenue protected | Unknown | $210–$480/day per incident |
+
+**Target users:** Grid operators, O&M teams, energy asset managers at utility-scale renewable facilities.
+
+---
+
+## 2. Technical Execution
+
+### System Architecture
+
+```
+NumPy Physics Simulator (stream_live.py)
+    │
+    ├──[HTTP POST]──→ Ingestion Service (port 8002)
+    │                     │
+    │                     ├── Pydantic v2 envelope validation
+    │                     ├── State store (rolling telemetry window)
+    │                     ├── Anomaly scoring → Anomaly Service (port 8001)
+    │                     ├── Alert correlation → incident candidate
+    │                     ├── SSE broadcast → frontend Live Event Feed
+    │                     └──[background]──→ CrewAI Service (port 8003)
+    │                                               │
+    └──[Kafka]──→ gridops.raw.events ───────────────┘
+                  (opt-in, KAFKA_BOOTSTRAP_SERVERS)
+                                               │
+                                     TrueFoundry AI Gateway
+                                     (routes to GPT-4o-mini / GPT-4o)
+                                               │
+                                     9 CrewAI Agents (sequential)
+                                               │
+                                     Incident Report API (port 8000)
+                                               │
+                                     Next.js Frontend (port 3000)
+```
+
+### Key Technical Decisions
+
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Event schema | Pydantic v2 with `schema_version` + `correlation_id` | Forward-compatible, validation at ingest boundary |
+| LLM routing | TrueFoundry AI Gateway | Unified observability, cost tracking, key rotation |
+| Agent framework | CrewAI sequential crew | Deterministic execution order for audit compliance |
+| Real-time feed | Server-Sent Events (SSE) | Simple, browser-native, no WebSocket overhead |
+| Event bus | HTTP (demo) + Kafka (production) | Gradual migration path, `--sink both` flag |
+| Data generation | NumPy physics simulator | Physics-based degradation curves, not random noise |
+| Human-in-the-loop | Governance gate in Agent 8 | Regulatory compliance — no automated asset-offline actions |
+
+### 9-Agent CrewAI Pipeline
+
+```
+1. Alert Correlation Agent     → groups overlapping alerts into incident window
+2. Telemetry Analysis Agent    → analyzes temperature/fan/power via ML scoring
+3. Maintenance History Agent   → checks asset service records & runtime hours
+4. Weather & Forecast Agent    → rules out weather as root cause
+5. Root Cause Agent            → synthesizes 1–4 → root cause + confidence
+6. Business Impact Agent       → calculates energy loss (MWh/day) + revenue ($/day)
+7. Maintenance Recommendation  → recommends corrective action + urgency window
+8. Safety Governance Agent     → applies governance rules → human approval gate
+9. Operator Briefing Agent ★   → writes plain-English briefing (GPT-4o)
+```
+
+### Quick Start
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Configure TrueFoundry credentials
+# Clone and configure
 cp .env.example .env
-# Edit .env: set TFY_GATEWAY_BASE_URL and TFY_API_KEY
+# Set TFY_GATEWAY_BASE_URL and TFY_API_KEY in .env
 
-# 3. Generate all synthetic data
-make gen-data
+# Start everything (backend + frontend) in one command
+./run_demo.sh
+# → Opens at http://localhost:3000
 
-# 4. Start all services (4 terminals)
-make run-anomaly   # Anomaly scoring service — port 8001
-make run-ingest    # Event ingestion service — port 8002
-make run-crew      # CrewAI workflow service — port 8003
-make run-api       # Incident report API     — port 8000
-
-# 5. Run the demo scenario
-make produce       # Streams inverter cooling degradation scenario
-
-# 6. Check results
-curl localhost:8000/api/incidents
-
-# 7. Approve the incident
-curl -X POST localhost:8000/api/incidents/INC-INV042-20260616/decision \
-  -H "Content-Type: application/json" \
-  -d '{"decision": "approved", "actor": "operator"}'
-
-# 8. Run evaluation
-make eval
+# Or with Docker
+docker compose up
 ```
 
-## Architecture
+### Repository Structure
 
 ```
-JSONL Streams → Ingestion Service → Anomaly Service (TFY)
-                                          ↓
-                              Incident Correlation
-                                          ↓
-                              CrewAI 9-Agent Workflow → TFY AI Gateway → LLM
-                                          ↓
-                              Incident Report API → Frontend
+GridOps/
+├── .env / .env.example          ← credentials (never committed)
+├── run_demo.sh                  ← one-command full-stack launcher
+├── docker-compose.yml           ← Docker orchestration
+├── PRODUCTION_READINESS.md      ← detailed production assessment
+├── frontend/                    ← Next.js 14 App Router UI
+└── backend/
+    ├── agents/                  ← CrewAI 9-agent pipeline (port 8003)
+    ├── common/                  ← Pydantic v2 envelope + shared schemas
+    ├── config/                  ← environment settings
+    ├── services/
+    │   ├── anomaly_service/     ← ML anomaly scoring (port 8001)
+    │   ├── ingestion_service/   ← event ingest + correlation + SSE (port 8002)
+    │   └── incident_api/        ← incident REST API (port 8000)
+    ├── scripts/                 ← stream_live.py (physics simulator + Kafka producer)
+    ├── data/                    ← assets, scenarios, eval reports, maintenance records
+    ├── evaluation/              ← eval harness + metrics
+    ├── tfy/                     ← TrueFoundry deployment YAML
+    └── requirements.txt
 ```
 
-See `docs/architecture.md` for full details.
+---
 
-## Scenarios
+## 3. Innovation & Creativity
 
-| ID | Name | Incident | Focal Asset |
-|----|------|---------|-------------|
-| SCN-A | Normal Operation | No | — |
-| SCN-B | Inverter Cooling Degradation | **Yes** | INV-042 |
-| SCN-C | BESS Thermal Management Risk | **Yes** | BESS-011 |
-| SCN-D | Weather-Driven False Positive | No | — |
+### What Makes GridOps Copilot Different
 
-## Repository Structure
+**1. Physics-Based Synthetic Data — Not Random Noise**  
+`stream_live.py` uses NumPy differential equations to simulate real inverter cooling
+degradation: `temp = base_temp + (1 - cooling_eff) × thermal_rise`. The simulator has
+three phases (Normal → Degrading → Critical) that produce statistically realistic alert
+patterns — exactly what a real SCADA system would emit.
 
-```
-common/             Shared envelope + schemas (Pydantic v2)
-config/             Settings (env vars)
-scripts/            Data generator + event producer/consumer
-services/
-  anomaly_service/  TFY-deployable anomaly scorer (port 8001)
-  ingestion_service/ Event ingestion + correlation (port 8002)
-  incident_api/     Frontend-facing REST API (port 8000)
-agents/             CrewAI 9-agent workflow (port 8003)
-evaluation/         Eval runner + metrics
-deployment/         TrueFoundry YAML + Kafka topics
-docs/               Architecture, data contracts, demo script
-data/               Generated assets, scenarios, eval reports
-```
+**2. Alert Compression Engine**  
+The correlation engine ingests 12 raw alerts and outputs 1 incident candidate.
+The frontend visualizes this as a compression ratio (12 → 1) with the full alert
+stream visible in the Live Event Feed ticker — judges can literally watch the noise
+get compressed in real time.
+
+**3. End-to-End Traceability**  
+Every incident report stores the TrueFoundry trace IDs for all 9 LLM calls —
+`all_call_trace_ids` — enabling per-agent cost and latency attribution on the
+TrueFoundry gateway dashboard.
+
+**4. Human-in-the-Loop Governance**  
+Agent 8 checks `config/governance_rules.yaml` and sets `approval_required: true`
+for any action that requires taking an asset offline. The UI enforces this gate —
+the "Approve" button is gated, the audit trail is immutable, and every decision
+is logged with actor + timestamp + reason.
+
+**5. Dual-Path Event Bus (HTTP + Kafka)**  
+The same ingestion pipeline accepts events via both HTTP POST and a Kafka consumer
+topic (`gridops.raw.events`). Operators can start with HTTP (zero infrastructure)
+and switch to Kafka for production scale without changing any application code —
+just set `KAFKA_BOOTSTRAP_SERVERS`.
+
+**6. Scripted Live Demo with Auto-Navigation**  
+The demo is a fully scripted 35-second story arc: events stream → page auto-navigates
+to AI Workflow → agents animate one-by-one → page returns to Command Centre → KPI
+cards reveal with staggered animation. No manual clicking required during the demo.
+
+---
+
+## 4. Production Readiness
+
+GridOps Copilot is designed with production-grade patterns throughout:
+
+| Layer | Implementation |
+|-------|---------------|
+| **LLM Gateway** | All 9 agents route through TrueFoundry AI Gateway — unified key, cost tracking, trace IDs, fallback to direct OpenAI if gateway unreachable |
+| **Containerisation** | 4 Dockerfiles with non-root users, HEALTHCHECK, and resource limits |
+| **K8s / TFY Deploy** | `backend/tfy/truefoundry.yaml` — one-command deploy of all 4 services with horizontal scaling, secret injection, readiness probes |
+| **Kafka** | Optional Kafka consumer in ingestion service (activate via `KAFKA_BOOTSTRAP_SERVERS`) + Kafka producer in `stream_live.py` (`--sink kafka`) |
+| **Reliability** | `max_iter=5` + `max_retry_limit=2` per CrewAI agent; LLM fallback chain (Gateway → OpenAI → mock report) |
+| **Observability** | Real TFY trace IDs captured via LiteLLM callback; per-agent token counts and cost stored in every incident report |
+| **Audit Trail** | Every human decision (approve/reject/work_order) is immutably logged with actor + timestamp |
+| **Evaluation** | Ground truth JSON for all 4 scenarios; eval harness checks root cause accuracy, false escalation rate, confidence calibration |
+
+**→ Full assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md)**
+
+---
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TFY_GATEWAY_BASE_URL` | TrueFoundry AI Gateway URL | _(required)_ |
-| `TFY_API_KEY` | TrueFoundry API key | _(required)_ |
-| `GRIDOPS_SEED` | Global RNG seed | 42 |
-| `ENERGY_PRICE_PER_MWH` | Energy price for impact calc | 75 |
-| `ANOMALY_SERVICE_URL` | Anomaly service URL | http://localhost:8001 |
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `TFY_GATEWAY_BASE_URL` | TrueFoundry AI Gateway base URL | Yes |
+| `TFY_API_KEY` | TrueFoundry API key | Yes |
+| `OPENAI_API_KEY` | Direct OpenAI fallback key | Optional |
+| `ENERGY_PRICE_PER_MWH` | Energy price for impact calculation | No (default: 75) |
+| `KAFKA_BOOTSTRAP_SERVERS` | Enable Kafka consumer in ingestion service | No |
+| `ANOMALY_SERVICE_URL` | Anomaly service URL | No (default: localhost:8001) |
 
-## Full-Stack Demo
-
-### Option A — UI-driven (recommended)
-
-```bash
-# Terminal 1–4: start all backend services
-make run-anomaly &   # port 8001
-make run-ingest  &   # port 8002
-make run-crew    &   # port 8003
-make run-api         # port 8000
-
-# Terminal 5: start frontend in LIVE mode
-cd frontend
-cp .env.local.example .env.local
-# Edit .env.local → set NEXT_PUBLIC_USE_LIVE_API=true
-npm install && npm run dev          # http://localhost:3000
-
-# In the browser:
-# 1. Select "Inverter Cooling Degradation" scenario in the header dropdown
-# 2. Click "Run AI Analysis" — events stream, agents animate, incident appears
-# 3. Click the incident → Approve → work order created + audit trail updates
-```
-
-### Option B — CLI-driven
-
-```bash
-# After all 4 services are up:
-make produce-fast      # instant replay, triggers crew in background
-sleep 120              # wait for 9-agent CrewAI workflow
-curl localhost:8000/api/incidents   # → incident for INV-042
-```
-
-### Option C — All 4 scenarios
-
-```bash
-make run-all-scenarios  # reset → stream → poll per scenario
-make eval               # evaluate against ground truth
-```
-
-### Frontend fixture mode (no backend required)
-
-```bash
-cd frontend && npm install && npm run dev
-# NEXT_PUBLIC_USE_LIVE_API defaults to false → full fixture demo
-```
+---
 
 ## Evaluation
 
 ```bash
+# Run all 4 scenarios and evaluate against ground truth
+cd backend && python scripts/run_all_scenarios.py
 python evaluation/run_eval.py --reports data/eval_reports/ --ground-truth data/ground_truth.json
 ```
 
-Target: 4/4 scenarios pass, `root_cause_accuracy=1.0`, `false_escalation_rate=0.0`.
+Target: 4/4 scenarios pass · `root_cause_accuracy = 1.0` · `false_escalation_rate = 0.0`
+
+---
 
 ## TrueFoundry Deployment
 
 ```bash
-# Deploy anomaly service
-truefoundry deploy --file deployment/truefoundry.yaml --workspace <workspace_fqn>
+# Deploy all 4 microservices to TrueFoundry managed K8s
+servicefoundry deploy --file backend/tfy/truefoundry.yaml --workspace <workspace-fqn>
+
+# Or with Docker Compose (local)
+docker compose up
+
+# With Kafka (Redpanda)
+docker compose --profile kafka up
 ```
 
-See `deployment/truefoundry.yaml` for the service spec.
+---
+
+*GridOps Copilot — Built for TrueFoundry × CrewAI Hackathon, June 2026*  
+*Desert Sun Solar + BESS Facility (500 MW) · 9 CrewAI Agents · TrueFoundry AI Gateway*

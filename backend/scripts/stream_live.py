@@ -35,6 +35,23 @@ from typing import Any
 import numpy as np
 import requests
 
+# ── Optional Kafka producer ────────────────────────────────────────────────────
+# Only imported / used when --sink kafka or KAFKA_BOOTSTRAP_SERVERS env is set.
+# Falls back to HTTP gracefully if confluent_kafka is not installed.
+
+def _make_kafka_producer(bootstrap_servers: str):
+    """Return a confluent_kafka Producer or None if unavailable."""
+    try:
+        from confluent_kafka import Producer
+        p = Producer({"bootstrap.servers": bootstrap_servers, "client.id": "gridops-stream-live"})
+        return p
+    except ImportError:
+        print("  [WARN] confluent-kafka not installed — Kafka sink unavailable", file=sys.stderr)
+        return None
+    except Exception as exc:
+        print(f"  [WARN] Kafka producer init failed: {exc}", file=sys.stderr)
+        return None
+
 # ── Asset constants ────────────────────────────────────────────────────────────
 
 ASSET_ID = "INV-042"
@@ -373,6 +390,18 @@ def main() -> None:
         "--max-runtime-secs", type=float, default=0,
         help="Auto-stop after this many real seconds (0 = run forever)",
     )
+    parser.add_argument(
+        "--sink", choices=["http", "kafka", "both", "stdout"], default="http",
+        help="Event sink: http (default), kafka, both, or stdout (dry-run)",
+    )
+    parser.add_argument(
+        "--kafka-bootstrap", default=None,
+        help="Kafka bootstrap servers (overrides KAFKA_BOOTSTRAP_SERVERS env var)",
+    )
+    parser.add_argument(
+        "--kafka-topic", default="gridops.raw.events",
+        help="Kafka topic for raw events (default: gridops.raw.events)",
+    )
     args = parser.parse_args()
 
     real_interval_s = args.sim_interval / args.speed
@@ -380,13 +409,36 @@ def main() -> None:
 
     state = LiveState(seed=args.seed, sim_interval_mins=args.sim_interval)
 
+    # Resolve sink mode
+    sink = args.sink
+    if args.dry_run:
+        sink = "stdout"
+
+    # Resolve Kafka bootstrap servers
+    kafka_bootstrap = (
+        args.kafka_bootstrap
+        or __import__("os").environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
+    )
+    kafka_producer = None
+    kafka_topic = args.kafka_topic
+
+    if sink in ("kafka", "both"):
+        if kafka_bootstrap:
+            kafka_producer = _make_kafka_producer(kafka_bootstrap)
+            if kafka_producer is None:
+                print("  [WARN] Falling back to HTTP sink", file=sys.stderr)
+                sink = "http"
+        else:
+            print("  [WARN] --kafka-bootstrap / KAFKA_BOOTSTRAP_SERVERS not set — using HTTP", file=sys.stderr)
+            sink = "http"
+
     print(f"\n{BOLD}GridOps Live Event Generator{RESET}")
     print(f"  Speed:         {args.speed}x ({args.sim_interval} sim-min = {real_interval_s:.2f}s real)")
     print(f"  Phase 1:       {args.phase1_real_mins} real-min of normal operation ({phase1_steps} steps)")
-    print(f"  Sink:          {'[DRY RUN]' if args.dry_run else args.ingestion_url}")
+    print(f"  Sink:          {sink}" + (f" → {kafka_bootstrap}/{kafka_topic}" if kafka_producer else f" → {args.ingestion_url}"))
     print(f"  Press Ctrl-C to stop\n")
 
-    session = requests.Session() if not args.dry_run else None
+    session = requests.Session() if sink in ("http", "both") else None
 
     # Register scenario context with ingestion service
     if not args.dry_run:
@@ -437,6 +489,9 @@ def main() -> None:
 
             for event in events:
                 print_event(event, state.phase)
+                payload = json.dumps(event).encode()
+
+                # ── HTTP sink ────────────────────────────────────────────────
                 if session is not None:
                     try:
                         session.post(
@@ -446,6 +501,18 @@ def main() -> None:
                         )
                     except Exception as exc:
                         print(f"  \033[31m[WARN] POST failed: {exc}{RESET}", file=sys.stderr)
+
+                # ── Kafka sink ───────────────────────────────────────────────
+                if kafka_producer is not None:
+                    try:
+                        kafka_producer.produce(
+                            topic=kafka_topic,
+                            key=event.get("asset_id", ASSET_ID).encode(),
+                            value=payload,
+                        )
+                        kafka_producer.poll(0)  # non-blocking flush
+                    except Exception as exc:
+                        print(f"  \033[31m[WARN] Kafka produce failed: {exc}{RESET}", file=sys.stderr)
 
             state.step += 1
 
@@ -461,6 +528,9 @@ def main() -> None:
     finally:
         if session:
             session.close()
+        if kafka_producer:
+            kafka_producer.flush(timeout=5)
+            print(f"  Kafka flush complete.")
 
 
 if __name__ == "__main__":

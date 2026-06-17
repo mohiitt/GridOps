@@ -60,22 +60,22 @@ if [ ! -d "$VENV_DIR" ]; then
   "$PYTHON_CMD" -m venv "$VENV_DIR"
   echo "Virtual environment created at $VENV_DIR"
   
-  echo "Installing Python dependencies (requirements.txt)..."
+  echo "Installing Python dependencies (backend/requirements.txt)..."
   "$VENV_DIR/bin/pip" install --upgrade pip
-  "$VENV_DIR/bin/pip" install -r requirements.txt
+  "$VENV_DIR/bin/pip" install -r backend/requirements.txt
 else
   echo "Found existing virtual environment at $VENV_DIR"
   # Check if requirements are installed (try to import numpy)
   if ! "$VENV_DIR/bin/python" -c 'import numpy' &>/dev/null; then
     echo "Dependencies are missing in virtual environment. Running pip install..."
     "$VENV_DIR/bin/pip" install --upgrade pip
-    "$VENV_DIR/bin/pip" install -r requirements.txt
+    "$VENV_DIR/bin/pip" install -r backend/requirements.txt
   fi
 fi
 
 # Generate synthetic data using the venv python
 echo "Generating synthetic data..."
-"$VENV_DIR/bin/python" scripts/generate_synthetic_data.py --all
+"$VENV_DIR/bin/python" backend/scripts/generate_synthetic_data.py --all
 
 # Check frontend node modules
 if [ ! -d "frontend/node_modules" ]; then
@@ -124,29 +124,30 @@ source .env
 set +a
 
 REPO_ROOT="$(pwd)"
+BACKEND="$REPO_ROOT/backend"
 
 echo "Starting microservices..."
 
 # 1. Anomaly Scoring Service (Port 8001)
-PYTHONPATH="$REPO_ROOT" "$VENV_DIR/bin/uvicorn" services.anomaly_service.main:app \
+PYTHONPATH="$BACKEND" "$VENV_DIR/bin/uvicorn" services.anomaly_service.main:app \
   --port 8001 --log-level warning > /tmp/gridops-anomaly.log 2>&1 &
 PIDS+=($!)
 echo " - Anomaly Service started on port 8001 (PID $!)"
 
 # 2. Event Ingestion Service (Port 8002)
-PYTHONPATH="$REPO_ROOT" "$VENV_DIR/bin/uvicorn" services.ingestion_service.main:app \
+PYTHONPATH="$BACKEND" "$VENV_DIR/bin/uvicorn" services.ingestion_service.main:app \
   --port 8002 --log-level warning > /tmp/gridops-ingestion.log 2>&1 &
 PIDS+=($!)
 echo " - Ingestion Service started on port 8002 (PID $!)"
 
 # 3. CrewAI Workflow Service (Port 8003)
-PYTHONPATH="$REPO_ROOT" "$VENV_DIR/bin/uvicorn" agents.crew:app \
+PYTHONPATH="$BACKEND" "$VENV_DIR/bin/uvicorn" agents.crew:app \
   --port 8003 --log-level warning > /tmp/gridops-crew.log 2>&1 &
 PIDS+=($!)
 echo " - CrewAI Workflow Service started on port 8003 (PID $!)"
 
 # 4. Incident Report API (Port 8000)
-PYTHONPATH="$REPO_ROOT" "$VENV_DIR/bin/uvicorn" services.incident_api.main:app \
+PYTHONPATH="$BACKEND" "$VENV_DIR/bin/uvicorn" services.incident_api.main:app \
   --port 8000 --log-level warning > /tmp/gridops-api.log 2>&1 &
 PIDS+=($!)
 echo " - Incident API Service started on port 8000 (PID $!)"
@@ -195,8 +196,8 @@ echo " - Frontend Server started on port 3000 (PID $!)"
 echo ""
 echo "=== All services are running! ==="
 echo "👉 Open your browser to http://localhost:3000"
-echo "👉 Select 'Inverter Cooling Degradation' → click 'Run AI Analysis'"
-echo "👉 Watch live events flow in the ticker for ~2 min, then incident auto-appears"
+echo "👉 Click 'Start Live Stream' on the Command Centre page"
+echo "👉 Events flow 15s → AI agents animate 15s → KPIs reveal on Command Centre"
 echo "👉 Service logs: /tmp/gridops-*.log"
 echo "👉 Press Ctrl+C in this terminal to stop all services."
 echo ""

@@ -1,7 +1,7 @@
 version: "3.9"
 
 services:
-  # Mode 2 (optional): Redpanda as Kafka-compatible broker
+  # Optional: Redpanda as Kafka-compatible broker
   redpanda:
     image: vectorized/redpanda:latest
     command:
@@ -21,7 +21,7 @@ services:
 
   anomaly_service:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/anomaly_service/Dockerfile
     ports:
       - "8001:8001"
@@ -31,7 +31,7 @@ services:
 
   ingestion_service:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/ingestion_service/Dockerfile
     ports:
       - "8002:8002"
@@ -40,12 +40,14 @@ services:
       CREW_SERVICE_URL: http://crew_service:8003
       INCIDENT_API_URL: http://incident_api:8000
       PYTHONPATH: /app
+      # Uncomment to enable Kafka consumer:
+      # KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
     volumes:
-      - ./data:/app/data
+      - ./backend/data:/app/data
 
   crew_service:
     build:
-      context: .
+      context: ./backend
       dockerfile: agents/Dockerfile
     ports:
       - "8003:8003"
@@ -57,15 +59,15 @@ services:
       INCIDENT_API_URL: http://incident_api:8000
       PYTHONPATH: /app
     volumes:
-      - ./data:/app/data
+      - ./backend/data:/app/data
 
   incident_api:
     build:
-      context: .
+      context: ./backend
       dockerfile: services/incident_api/Dockerfile
     ports:
       - "8000:8000"
     environment:
       PYTHONPATH: /app
     volumes:
-      - ./data:/app/data
+      - ./backend/data:/app/data

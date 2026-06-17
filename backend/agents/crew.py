@@ -23,7 +23,7 @@ from crewai import Agent, Crew, Process, Task
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from .llm import briefing_llm, default_llm
+from .llm import briefing_llm, default_llm, get_aggregated_trace_metrics, clear_trace_store, is_gateway_configured
 from .tools import (
     apply_governance_rules,
     calculate_business_impact,
@@ -83,6 +83,30 @@ def _parse_json_output(raw: str) -> dict[str, Any]:
     return {}
 
 
+def _crew_step_callback(step_output: Any) -> None:
+    """
+    Called after every agent step. Logs progress and could push to a
+    monitoring dashboard or emit a webhook in production.
+    """
+    logger = logging.getLogger("gridops.crew.step")
+    try:
+        agent_name = getattr(step_output, "agent", "unknown")
+        raw = str(getattr(step_output, "result", step_output))[:200]
+        logger.info("[CrewAI step] agent=%s output_preview=%s…", agent_name, raw)
+    except Exception:
+        pass
+
+
+def _crew_task_callback(task_output: Any) -> None:
+    """Called after every task completes — log task name and token summary."""
+    logger = logging.getLogger("gridops.crew.task")
+    try:
+        description = str(getattr(task_output, "description", ""))[:80]
+        logger.info("[CrewAI task] completed: %s…", description)
+    except Exception:
+        pass
+
+
 def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
     """Construct the 9-agent crew for an incident candidate."""
     agents_cfg = _load_yaml(_AGENTS_YAML)
@@ -93,13 +117,21 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
 
     # ── Agents ──────────────────────────────────────────────────────────────
 
+    # Common agent kwargs — max_iter prevents infinite tool loops,
+    # max_retry_limit handles transient LLM/tool failures gracefully
+    _agent_defaults = dict(
+        verbose=True,
+        max_iter=5,           # max reasoning iterations per agent
+        max_retry_limit=2,    # retry on tool/LLM error before failing
+    )
+
     alert_corr_agent = Agent(
         role=agents_cfg["alert_correlation_agent"]["role"],
         goal=agents_cfg["alert_correlation_agent"]["goal"],
         backstory=agents_cfg["alert_correlation_agent"]["backstory"],
         tools=[query_alerts],
         llm=llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     telemetry_agent = Agent(
@@ -108,7 +140,7 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         backstory=agents_cfg["telemetry_analysis_agent"]["backstory"],
         tools=[query_telemetry_window, call_truefoundry_anomaly_service],
         llm=llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     maintenance_agent = Agent(
@@ -117,7 +149,7 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         backstory=agents_cfg["maintenance_history_agent"]["backstory"],
         tools=[query_maintenance_history],
         llm=llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     weather_agent = Agent(
@@ -126,7 +158,7 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         backstory=agents_cfg["weather_forecast_agent"]["backstory"],
         tools=[query_weather_context, query_forecast_vs_actual],
         llm=llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     root_cause_agent = Agent(
@@ -135,7 +167,7 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         backstory=agents_cfg["root_cause_agent"]["backstory"],
         tools=[],
         llm=llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     impact_agent = Agent(
@@ -144,7 +176,7 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         backstory=agents_cfg["business_impact_agent"]["backstory"],
         tools=[query_forecast_vs_actual, calculate_business_impact],
         llm=llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     rec_agent = Agent(
@@ -153,7 +185,7 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         backstory=agents_cfg["maintenance_recommendation_agent"]["backstory"],
         tools=[],
         llm=llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     gov_agent = Agent(
@@ -162,7 +194,7 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         backstory=agents_cfg["safety_governance_agent"]["backstory"],
         tools=[apply_governance_rules],
         llm=llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     briefing_agent = Agent(
@@ -171,7 +203,7 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         backstory=agents_cfg["operator_briefing_agent"]["backstory"],
         tools=[],
         llm=op_llm,
-        verbose=True,
+        **_agent_defaults,
     )
 
     # ── Task inputs ──────────────────────────────────────────────────────────
@@ -259,6 +291,9 @@ def build_crew(candidate: dict[str, Any], context: dict[str, Any]) -> Crew:
         tasks=[t1, t2, t3, t4, t5, t6, t7, t8, t9],
         process=Process.sequential,
         verbose=True,
+        # Production reliability: step + task callbacks for monitoring/tracing
+        step_callback=_crew_step_callback,
+        task_callback=_crew_task_callback,
     )
 
     return crew
@@ -334,20 +369,20 @@ def assemble_report(
     elapsed_ms = int((time.time() - start_ms) * 1000)
     usage_metrics = usage_metrics or {}
 
-    # Derive trace fields from real metrics when available
-    # CrewAI usage_metrics may contain total_tokens, prompt_tokens, completion_tokens
+    # Real trace metrics from TrueFoundry gateway via LiteLLM callback
     total_tokens = usage_metrics.get("total_tokens", 0)
-    # Cost estimate: gpt-4o-mini ~$0.15/1M input + $0.60/1M output tokens
-    # Use a conservative blended rate of $0.0003 / 1k tokens as estimate
-    if total_tokens:
-        cost_usd = round(total_tokens * 0.0003 / 1000, 6)
-    else:
-        # Fallback: estimate from elapsed time (rough proxy)
-        cost_usd = round(elapsed_ms * 0.0000014, 6)
+    prompt_tokens = usage_metrics.get("prompt_tokens", 0)
+    completion_tokens = usage_metrics.get("completion_tokens", 0)
+    cost_usd = usage_metrics.get("total_cost_usd") or (
+        round(total_tokens * 0.0003 / 1000, 6) if total_tokens
+        else round(elapsed_ms * 0.0000014, 6)
+    )
 
-    # tfy_trace_id: use gateway trace header if forwarded, else generate deterministic id
-    from .llm import is_gateway_configured
+    # Prefer real TFY trace ID from gateway response headers; fall back to generated ID
     trace_prefix = "tfy" if is_gateway_configured() else "local"
+    real_tfy_trace_id = usage_metrics.get("tfy_trace_id", "")
+    all_trace_ids = usage_metrics.get("all_call_trace_ids", [])
+    models_used = usage_metrics.get("models_used", [])
 
     # Load asset info
     asset_name = context.get("asset_name", f"Asset {asset_id}")
@@ -379,11 +414,16 @@ def assemble_report(
         "governance": governance,
         "operator_briefing": briefing_text,
         "trace": {
-            "tfy_trace_id": f"{trace_prefix}_trace_{inc_id.lower().replace('-', '_')}",
-            "llm_calls": len(task_outputs),  # one LLM call per task
+            "tfy_trace_id": real_tfy_trace_id or f"{trace_prefix}_trace_{inc_id.lower().replace('-', '_')}",
+            "all_call_trace_ids": all_trace_ids,
+            "llm_calls": len(task_outputs),
             "total_latency_ms": elapsed_ms,
             "total_tokens": total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
             "total_cost_usd": cost_usd,
+            "models_used": models_used or ["openai/gpt-4o-mini", "openai/gpt-4o"],
+            "gateway": "truefoundry" if is_gateway_configured() else "direct_openai",
         },
     }
 
@@ -599,17 +639,23 @@ def run_incident(req: RunIncidentRequest) -> dict[str, Any]:
             context["asset_type"] = asset.get("asset_type", "solar_inverter")
 
     try:
+        # Clear trace store before this run so metrics are run-scoped
+        clear_trace_store()
+
         crew = build_crew(candidate, context)
         result = crew.kickoff()
         task_outputs = crew.tasks
 
-        # Collect real usage metrics from CrewAI if available
-        usage_metrics: dict[str, Any] = {}
-        try:
-            if hasattr(crew, "usage_metrics") and crew.usage_metrics:
-                usage_metrics = dict(crew.usage_metrics)
-        except Exception:
-            pass
+        # Collect real usage metrics: prefer LiteLLM callback traces (TrueFoundry),
+        # fall back to CrewAI's built-in usage_metrics
+        tfy_metrics = get_aggregated_trace_metrics()
+        usage_metrics: dict[str, Any] = tfy_metrics if tfy_metrics else {}
+        if not usage_metrics:
+            try:
+                if hasattr(crew, "usage_metrics") and crew.usage_metrics:
+                    usage_metrics = dict(crew.usage_metrics)
+            except Exception:
+                pass
 
         report = assemble_report(candidate, context, task_outputs, start_ms, usage_metrics)
     except Exception as exc:

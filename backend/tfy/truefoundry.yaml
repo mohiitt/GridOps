@@ -1,0 +1,153 @@
+# GridOps Copilot — TrueFoundry Service Deployment Manifest
+# Deploy all 4 microservices onto TrueFoundry's managed Kubernetes platform.
+#
+# Usage:
+#   servicefoundry deploy --file tfy/truefoundry.yaml --workspace <workspace-fqn>
+#
+# Prerequisites:
+#   pip install servicefoundry
+#   tfy login
+#   tfy workspace set <workspace-fqn>
+
+name: gridops-copilot
+
+services:
+  # ── 1. Anomaly Scoring Service ─────────────────────────────────────────────
+  anomaly-service:
+    type: service
+    image:
+      type: build
+      build_spec:
+        type: dockerfile
+        dockerfile: services/anomaly_service/Dockerfile
+        build_context: backend
+    ports:
+      - port: 8001
+        protocol: TCP
+        expose: false          # internal only
+    resources:
+      cpu_request: "250m"
+      cpu_limit: "500m"
+      memory_request: "256Mi"
+      memory_limit: "512Mi"
+    replicas: 2                # horizontal scale for anomaly scoring
+    env:
+      USE_ML: "false"
+      PYTHONPATH: /app
+    readiness_probe:
+      path: /health
+      port: 8001
+      initial_delay_seconds: 5
+    liveness_probe:
+      path: /health
+      port: 8001
+      period_seconds: 30
+
+  # ── 2. Event Ingestion Service ─────────────────────────────────────────────
+  ingestion-service:
+    type: service
+    image:
+      type: build
+      build_spec:
+        type: dockerfile
+        dockerfile: services/ingestion_service/Dockerfile
+        build_context: backend
+    ports:
+      - port: 8002
+        protocol: TCP
+        expose: true           # publicly accessible for stream_live.py
+    resources:
+      cpu_request: "250m"
+      cpu_limit: "1000m"
+      memory_request: "256Mi"
+      memory_limit: "1Gi"
+    replicas: 1                # SSE state is in-memory — single replica for now
+    env:
+      ANOMALY_SERVICE_URL: "http://anomaly-service:8001"
+      CREW_SERVICE_URL: "http://crew-service:8003"
+      INCIDENT_API_URL: "http://incident-api:8000"
+      PYTHONPATH: /app
+      # Set KAFKA_BOOTSTRAP_SERVERS to enable Kafka consumer path
+      # KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+    mounts:
+      - type: volume
+        mount_path: /app/data
+        size: "1Gi"
+    readiness_probe:
+      path: /health
+      port: 8002
+      initial_delay_seconds: 5
+
+  # ── 3. CrewAI Workflow Service ─────────────────────────────────────────────
+  crew-service:
+    type: service
+    image:
+      type: build
+      build_spec:
+        type: dockerfile
+        dockerfile: agents/Dockerfile
+        build_context: backend
+    ports:
+      - port: 8003
+        protocol: TCP
+        expose: false          # internal only
+    resources:
+      cpu_request: "500m"
+      cpu_limit: "2000m"
+      memory_request: "512Mi"
+      memory_limit: "2Gi"
+    replicas: 2                # parallel crew runs for multiple incidents
+    env:
+      ANOMALY_SERVICE_URL: "http://anomaly-service:8001"
+      INCIDENT_API_URL: "http://incident-api:8000"
+      PYTHONPATH: /app
+    secrets:
+      - name: gridops-llm-secrets    # TrueFoundry Secret Group
+        env_vars:
+          TFY_API_KEY: TFY_API_KEY
+          TFY_GATEWAY_BASE_URL: TFY_GATEWAY_BASE_URL
+          OPENAI_API_KEY: OPENAI_API_KEY
+          ENERGY_PRICE_PER_MWH: ENERGY_PRICE_PER_MWH
+    mounts:
+      - type: volume
+        mount_path: /app/data
+        size: "2Gi"
+    readiness_probe:
+      path: /health
+      port: 8003
+      initial_delay_seconds: 10    # LLM client init takes a moment
+
+  # ── 4. Incident API ────────────────────────────────────────────────────────
+  incident-api:
+    type: service
+    image:
+      type: build
+      build_spec:
+        type: dockerfile
+        dockerfile: services/incident_api/Dockerfile
+        build_context: backend
+    ports:
+      - port: 8000
+        protocol: TCP
+        expose: true           # frontend polls this
+    resources:
+      cpu_request: "250m"
+      cpu_limit: "500m"
+      memory_request: "256Mi"
+      memory_limit: "512Mi"
+    replicas: 2
+    env:
+      PYTHONPATH: /app
+    mounts:
+      - type: volume
+        mount_path: /app/data
+        size: "5Gi"            # stores incident reports + eval results
+    readiness_probe:
+      path: /health
+      port: 8000
+      initial_delay_seconds: 5
+
+# ── Secret Group (create once, referenced by crew-service) ───────────────────
+# servicefoundry secret create TFY_API_KEY <value> --group gridops-llm-secrets
+# servicefoundry secret create TFY_GATEWAY_BASE_URL <value> --group gridops-llm-secrets
+# servicefoundry secret create OPENAI_API_KEY <value> --group gridops-llm-secrets
